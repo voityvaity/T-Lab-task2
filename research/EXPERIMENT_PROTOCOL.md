@@ -1,6 +1,6 @@
 # T-Lab 2026 / Задание 2 — протокол исследования
 
-**Версия:** 2026-10-25. **Статус:** preregistered plan; не подменять реальным отчётом, пока результаты отсутствуют. Изменения после просмотра test-метрик требуют отдельного объяснения. Все первичные численные выводы должны иметь источник в GitHub Actions artifacts или в приложенном локальном запуске с точными зависимостями.
+**Версия:** 2026-10-26. **Статус:** первоначальный протокол + явно помеченная ДОРАБОТКА ПОСЛЕ РЕАЛЬНОГО ПИЛОТА; окончательных сравнительных результатов улучшенной версии пока нет. Изменения после просмотра test-метрик требуют отдельного объяснения. Все первичные численные выводы должны иметь источник в GitHub Actions artifacts или в приложенном локальном запуске с точными зависимостями.
 
 ## 1. Основной исследовательский вопрос
 
@@ -38,8 +38,8 @@ GPT-2 обучается с нуля по train cross-entropy, лучший chec
 Цель `r=(min(played_ratio_pct,100)/100)` при **наблюдавшемся** прослушивании. Нет известных propensities всех показов, поэтому reward model — **регрессор на наблюдавшихся действиях**, а не контрфактический oracle.
 
 - Три head на замороженном GPT-2: `optimized`, `uncertainty` на одном пуле TRAIN-пользователей, `auditor` на другом пуле. Общий энкодер **не независим**, самостоятельного калиброванного доверительного интервала нет.
-- Контроль: MAE/RMSE against constant train mean; 10 бинов регрессионной калибровки; MAE для редких и частых по train объектов.
-- Если auditor не улучшает MAE константного предиктора на VALIDATION, автоматический выбор наградной политики блокируется. Остальные абляции всё равно оцениваются описательно и интерпретируются как отрицательная диагностика reward model.
+- Обновление после пилота: каждая reward-head получает сглаженный TRAIN-only item completion prior и contextual residual; обучение по MSE, выбор checkpoint по validation MSE. Контроль: RMSE vs TRAIN-среднее и train-only item prior, MAE vs TRAIN-медиана (MAE-оптимальная константа), 10 бинов калибровки, ошибки по редким/частым трекам.
+- Если optimized либо auditor не улучшает **RMSE** константного TRAIN-mean предиктора на observed VALIDATION, автоматический выбор наградной политики блокируется. Остальные абляции всё равно оцениваются описательно и интерпретируются как отрицательная диагностика reward model.
 - `conservative`: минимум двух прогнозов из независимых по инициализации head, **эвристика, не ROLeR и не гарантированная lower bound**.
 
 ## 5. RL и сравнение нескольких шагов
@@ -54,7 +54,7 @@ GPT-2 обучается с нуля по train cross-entropy, лучший chec
 
 ## 6. Валидационный выбор и test
 
-Настраивать `reward`, `β`, `horizon`, `rerank alpha` **только по validation**; до начала работы с test модель выбирается по наибольшему auditor reward при соблюдении *обоих* лимитов падения NDCG: **не более 5% относительно GPT-2** и **не более 0.005 абсолютного NDCG**. Нужен прирост auditor score **более 0.001** доли дослушивания и **оба** MAE guard: optimized RM и auditor RM должны превосходить свои константные TRAIN-mean baselines по MAE на validation. Это эвристика отсечения численно малых разниц, не формальная статистическая значимость. Иначе победитель — GPT-2. Порог уточнён **после синтетического smoke, но до первого реального эксперимента Yambda**, см. [SMOKE_AUDIT_2026-10-26.md](SMOKE_AUDIT_2026-10-26.md).
+Настраивать `reward`, `β`, `horizon`, `rerank alpha` **только по validation**; до начала работы с test модель выбирается по наибольшему auditor reward при соблюдении *обоих* лимитов падения NDCG: **не более 5% относительно GPT-2** и **не более 0.005 абсолютного NDCG**. Нужен прирост auditor score **более 0.001** доли дослушивания и **оба** RMSE guard: optimized RM и auditor RM должны превосходить свои константные TRAIN-mean baselines по RMSE на validation. Это эвристика отсечения численно малых разниц, не формальная статистическая значимость. Иначе победитель — GPT-2. Порог уточнён **после синтетического smoke, но до первого реального эксперимента Yambda**, см. [SMOKE_AUDIT_2026-10-26.md](SMOKE_AUDIT_2026-10-26.md).
 
 **Test не влияет на выбор.** Сохранить таблицу метрик всех моделей и descriptive test Pareto frontier: это прозрачность, не новый hyperparameter search. Нельзя выделять post-hoc победителя по тестовой NDCG.
 
@@ -77,8 +77,10 @@ GPT-2 обучается с нуля по train cross-entropy, лучший chec
 ## 9. Чеклист выпуска
 
 - [x] Первичный GitHub manual smoke на `06b5baa` — 44 tests passed, small fit and artifact saved. Это не проверка нового selection guard.
-- [ ] Повторный smoke на текущем HEAD после изменения selection guard.
-- [ ] First Yambda pilot succeeded; input file hash / artifact / SHA / logs confirmed.
+- [x] Повторный smoke на `19a903a` успешно завершён до новых post-pilot улучшений.
+- [ ] Smoke на текущем HEAD с dense causal SFT / item completion prior / MSE reward training.
+- [x] Первый Yambda pilot на `19a903a` успешен: [run 40225318999](https://github.com/voityvaity/T-Lab-task2/actions/runs/40225318999), отрицательный RL результат и слабая RM, см. [YAMBDA_PILOT_2026-10-26.md](YAMBDA_PILOT_2026-10-26.md).
+- [ ] Новый real `improved` run на текущем HEAD и проверка показателей GPT-2/RM на новой когорте.
 - [ ] Real trained checkpoints, validation and test tables, RM MAE and calibration bins available.
 - [ ] All RL/rerank/popularity/transition alternatives evaluated under the same protocol and no test-time winner picking.
 - [ ] OOV denominator and genuine strict five-step windows empirically checked.
@@ -86,3 +88,7 @@ GPT-2 обучается с нуля по train cross-entropy, лучший chec
 - [ ] Human-readable executive summary discusses good **and** bad outcomes and limitations honestly.
 
 До заполнения пунктов итоговый конкурсный отчёт **не готов**.
+
+## 10. Изменения после первого Yambda-пилота
+
+После анализа результатов первого real pilot были изменены обучающие алгоритмы: dense causal GPT-2, smoothed item completion prior, MSE reward fitting, zero-residual prior checkpoint, larger evaluation cohort и RMSE/median константные контроли. Эти изменения не выдаются за preregistered исходную гипотезу. Полная научная мотивация и запуск: [TRAINING_UPGRADE_2026-10-26.md](TRAINING_UPGRADE_2026-10-26.md). Результаты новой модели **отсутствуют**, пока не выполнен новый smoke и real Yambda-run.
