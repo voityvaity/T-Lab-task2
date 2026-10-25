@@ -78,10 +78,11 @@ def dense_autoregressive_loss(policy, x: torch.Tensor, y: torch.Tensor,
                               context_timestamps: torch.Tensor | None = None,
                               target_timestamps: torch.Tensor | None = None
                               ) -> tuple[torch.Tensor, dict]:
-    """Use every valid causal transition inside the history, plus its next item.
+    """Dense causal next-item CE, excluding tied-timestamp transitions.
 
-    No target leaks into its own prediction: target at position t is history
-    token t+1, and the LAST target is y. PAD/OOV are not prediction targets.
+    Train-only context timestamps are required for positive dense_weight so
+    arbitrary within-5-second-bin order never supplies a positive label.
+    PAD/OOV remain valid historical context (not prediction targets).
     """
     if not 0 <= dense_weight <= 1:
         raise ValueError("dense_weight must be in [0,1]")
