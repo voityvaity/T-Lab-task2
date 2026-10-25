@@ -118,3 +118,26 @@ def test_out_of_catalog_next_items_are_misses_not_discarded() -> None:
     assert per_query[1] == 0
     assert result["recall_at_10"] == pytest.approx(2 / 3)
     assert result["conditional_recall_at_10"] == pytest.approx(1.0)
+
+
+def test_supervised_validation_loss_ignores_oov_target() -> None:
+    from tlab2.experiment import supervised_validation_loss, train_base
+    model = make_gpt2(vocab_size=16, context_length=5, hidden=32, layers=1, heads=4)
+    train = Examples(
+        np.asarray([[0, 0, 2, 3, 4], [0, 2, 3, 4, 5]], dtype=np.int32),
+        np.asarray([6, 7], dtype=np.int64),
+        np.asarray([.7, .8], dtype=np.float32),
+        np.asarray([1, 2], dtype=np.int64),
+        np.asarray([1, 2], dtype=np.int64))
+    validation = Examples(
+        train.context.copy(), np.asarray([1, 7], dtype=np.int64),
+        train.completion.copy(), train.user.copy(), train.timestamp.copy())
+    metric = supervised_validation_loss(model, validation, batch_size=2,
+                                        device=torch.device("cpu"))
+    assert np.isfinite(metric)
+    logs = train_base(model, train, steps=2, batch_size=2,
+                      device=torch.device("cpu"), learning_rate=0.001,
+                      seed=42, validation=validation)
+    assert any(row.get("checkpoint_selection") == "minimum_in_vocab_validation_ce"
+               for row in logs)
+    assert model.training is False
