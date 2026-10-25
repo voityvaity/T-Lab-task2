@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import pytest
 
-from tlab2.selection import select_policy
+from tlab2.selection import select_policy, pareto_frontier
 
 
 def score(ndcg, auditor):
@@ -50,3 +50,17 @@ def test_ill_defined_configuration_is_rejected():
         select_policy({"gpt2": score(.1, .1)}, min_auditor_gain=-.1)
     with pytest.raises(ValueError):
         select_policy({}, baseline="gpt2")
+
+
+def test_pareto_frontier_keeps_non_dominated_accuracy_reward_tradeoff():
+    alternatives = {
+        "gpt2": score(.15, .5),
+        "rl_balanced": score(.14, .6),
+        "dominated": score(.13, .49),
+        "best_of_both": score(.16, .61),
+    }
+    frontier = pareto_frontier(alternatives)
+    assert [item["model"] for item in frontier] == ["best_of_both"]
+    tied = pareto_frontier({"gpt2": score(.16, .5),
+                           "rl": score(.14, .6)})
+    assert {item["model"] for item in tied} == {"gpt2", "rl"}
