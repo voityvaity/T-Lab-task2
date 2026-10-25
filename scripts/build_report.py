@@ -87,8 +87,8 @@ def report(result_path: Path) -> str:
                   f"- Допущено снижение не более {metric(sel['max_relative_ndcg_drop'] * 100)}% "
                   f"и одновременно не более {metric(sel['max_absolute_ndcg_drop'])} абсолютных NDCG.",
                   f"- Минимальный прирост аудитора: {metric(sel.get('min_auditor_gain'))} (эвристический порог).",
-                  f"- Optimized RM превосходит константу на validation: {sel.get('optimized_beats_constant_validation_mae', 'неизвестно')}.",
-                  f"- Auditor RM превосходит константу на validation: {sel.get('auditor_beats_constant_validation_mae', 'неизвестно')}.",
+                  f"- Optimized RM превосходит константу на validation: {sel.get('optimized_beats_constant_validation_rmse', 'неизвестно')}.",
+                  f"- Auditor RM превосходит константу на validation: {sel.get('auditor_beats_constant_validation_rmse', 'неизвестно')}.",
                   f"- Решение: `{sel['reason']}`. Здесь нет онлайн-оценки.", ""]
     if data.get("strongest_non_rl_accuracy_baseline_on_validation"):
         lines += [
