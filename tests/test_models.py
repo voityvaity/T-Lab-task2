@@ -141,3 +141,25 @@ def test_supervised_validation_loss_ignores_oov_target() -> None:
     assert any(row.get("checkpoint_selection") == "minimum_in_vocab_validation_ce"
                for row in logs)
     assert model.training is False
+
+
+def test_reward_calibration_and_popularity_diagnostics_use_observed_items_only() -> None:
+    from tlab2.experiment import reward_quality
+    base = make_gpt2(vocab_size=16, context_length=5, hidden=32, layers=1, heads=4)
+    rm = RewardModel(base, hidden=32)
+    x = np.asarray([[0, 0, 2, 3, 4]] * 4, dtype=np.int32)
+    sample = Examples(x, np.asarray([5, 1, 6, 7]),
+                      np.asarray([.2, .7, .8, 1.0], dtype=np.float32),
+                      np.asarray([1, 1, 2, 2]), np.asarray([10, 20, 30, 40]))
+    counts = torch.ones(16)
+    counts[5] = 1
+    counts[6] = 100
+    counts[7] = 2
+    diagnostics = reward_quality(rm, sample, prior_mean=.5,
+                                 batch_size=2, device=torch.device("cpu"),
+                                 train_counts=counts)
+    assert diagnostics["n_observed"] == 3
+    assert sum(row["count"] for row in diagnostics["calibration_bins"]) == 3
+    groups = diagnostics["mae_by_training_popularity"]
+    assert groups["rare"]["observations"] + groups["frequent"]["observations"] == 3
+    assert 0 <= diagnostics["mae"] <= 1
