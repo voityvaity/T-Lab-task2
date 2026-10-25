@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict, deque
 from dataclasses import asdict, dataclass
 from pathlib import Path
+import hashlib
 import json
 import random
 
@@ -56,6 +57,7 @@ class DataBundle:
     boundaries: dict[str, int]
     config: DataConfig
     session_proxy: dict[str, dict]
+    train_cohort_sha256: str
 
 
 def _scan_stats(path: Path) -> tuple[int, int, Counter]:
@@ -193,6 +195,9 @@ def prepare(path: str | Path, cfg: DataConfig) -> DataBundle:
     t_train = first + int(span * cfg.train_fraction)
     t_valid = first + int(span * (cfg.train_fraction + cfg.valid_fraction))
     users = _select_train_users(path, t_train, cfg.users, cfg.seed)
+    # Hash the full selected cohort, not only users represented in the
+    # capped training-example reservoir. Do not publish raw user IDs.
+    cohort_sha256 = hashlib.sha256(",".join(map(str, sorted(users))).encode("utf-8")).hexdigest()
     df = _load_events(path, users)
     df = df.sort_values(["uid", "timestamp"], kind="stable").reset_index(drop=True)
     if df[list(REQUIRED)].isna().any().any():
@@ -262,7 +267,7 @@ def prepare(path: str | Path, cfg: DataConfig) -> DataBundle:
     return DataBundle(_to_examples(train_rows, cfg.context_length), _to_examples(valid_rows, cfg.context_length),
                       _to_examples(test_rows, cfg.context_length), token_to_item, item_counts, item_seconds,
                       coverage, {"first": first, "last": last, "train_end": t_train, "valid_end": t_valid}, cfg,
-                      sessions)
+                      sessions, cohort_sha256)
 
 
 def save_metadata(bundle: DataBundle, output: str | Path) -> None:
@@ -272,5 +277,6 @@ def save_metadata(bundle: DataBundle, output: str | Path) -> None:
             "coverage": bundle.coverage, "train_size": len(bundle.train),
             "valid_size": len(bundle.valid), "test_size": len(bundle.test),
             "mapped_items": len(bundle.token_to_item),
-            "observed_session_return_proxy_test_only": bundle.session_proxy}
+            "observed_session_return_proxy_test_only": bundle.session_proxy,
+            "selected_train_user_cohort_sha256": bundle.train_cohort_sha256}
     (root / "dataset_protocol.json").write_text(json.dumps(info, indent=2, ensure_ascii=False), encoding="utf-8")
