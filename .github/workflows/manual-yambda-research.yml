@@ -84,6 +84,9 @@ jobs:
       - name: Build measured offline Markdown report
         if: success()
         run: python scripts/build_report.py --input outputs/yambda/experiment.json --output outputs/yambda/REPORT.md
+      - name: Plot NDCG/reward tradeoffs from measured artifacts
+        if: success()
+        run: python scripts/plot_tradeoff.py --input outputs/yambda/experiment.json --outdir outputs/yambda
       - name: Upload research artifacts
         if: always()
         uses: actions/upload-artifact@v4
