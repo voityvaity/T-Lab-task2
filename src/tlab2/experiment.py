@@ -99,20 +99,49 @@ def policy_logits(policy, context: torch.Tensor) -> torch.Tensor:
 
 @torch.no_grad()
 def reward_quality(model: RewardModel, sample: Examples, prior_mean: float,
-                   batch_size: int, device) -> dict:
+                   batch_size: int, device,
+                   train_counts: torch.Tensor | None = None) -> dict:
     model.eval()
     predictions = []
     labels = []
+    popularity = []
     for x, y, label in batches(sample, batch_size, device, seed=0, shuffle=False):
         eligible = y >= 2
         if eligible.any():
             predictions.extend(model(x[eligible], y[eligible]).cpu().tolist())
             labels.extend(label[eligible].cpu().tolist())
+            if train_counts is not None:
+                popularity.extend(train_counts[y[eligible]].cpu().tolist())
     if not labels:
         raise ValueError("No in-catalog observed items available for reward-model evaluation")
     pred = np.asarray(predictions)
     actual = np.asarray(labels)
-    return {"mae": float(np.abs(pred - actual).mean()),
+    # Regression reliability diagram: equal-width bins, not classification
+    # ECE. Both predicted and real completion fractions belong to [0, 1].
+    bin_index = np.minimum((pred * 10).astype(np.int64), 9)
+    reliability = []
+    for i in range(10):
+        chosen = bin_index == i
+        reliability.append({
+            "bin": i, "count": int(chosen.sum()),
+            "mean_predicted": float(pred[chosen].mean()) if chosen.any() else None,
+            "mean_observed": float(actual[chosen].mean()) if chosen.any() else None,
+            "mae": float(np.abs(pred[chosen] - actual[chosen]).mean()) if chosen.any() else None,
+        })
+    by_popularity = None
+    if train_counts is not None:
+        pop = np.asarray(popularity)
+        threshold = float(torch.median(train_counts[2:].float()).item())
+        by_popularity = {}
+        for name, group in (("rare", pop <= threshold), ("frequent", pop > threshold)):
+            by_popularity[name] = {
+                "observations": int(group.sum()),
+                "mae": float(np.abs(pred[group] - actual[group]).mean()) if group.any() else None,
+                "mean_observed": float(actual[group].mean()) if group.any() else None,
+            }
+    return {"calibration_bins": reliability,
+            "mae_by_training_popularity": by_popularity,
+            "mae": float(np.abs(pred - actual).mean()),
             "rmse": float(np.sqrt(np.square(pred - actual).mean())),
             "constant_mean_mae": float(np.abs(actual - prior_mean).mean()),
             "constant_mean_rmse": float(np.sqrt(np.square(actual - prior_mean).mean())),
@@ -343,9 +372,9 @@ def run(args) -> dict:
                                    device, args.reward_lr, args.seed + 2)
     torch.save(audit.head.state_dict(), out / "auditor_head.pt")
     reward_metrics = {
-        "optimized_valid": reward_quality(reward, data.valid, float(optim_train.completion.mean()), args.batch, device),
-        "auditor_valid": reward_quality(audit, data.valid, float(auditor_train.completion.mean()), args.batch, device),
-        "uncertainty_valid": reward_quality(uncertainty, data.valid, float(optim_train.completion.mean()), args.batch, device),
+        "optimized_valid": reward_quality(reward, data.valid, float(optim_train.completion.mean()), args.batch, device, train_counts=counts),
+        "auditor_valid": reward_quality(audit, data.valid, float(auditor_train.completion.mean()), args.batch, device, train_counts=counts),
+        "uncertainty_valid": reward_quality(uncertainty, data.valid, float(optim_train.completion.mean()), args.batch, device, train_counts=counts),
         "auditor_train_user_disjoint": True,
     }
     base_valid, _ = evaluate(base, data.valid, reward, audit, counts, durations, device, args.batch)
@@ -418,9 +447,9 @@ def run(args) -> dict:
         validation[name] = metrics
 
     # All test evaluation happens after validation-only model selection.
-    reward_metrics["optimized_test"] = reward_quality(reward, data.test, float(optim_train.completion.mean()), args.batch, device)
-    reward_metrics["auditor_test"] = reward_quality(audit, data.test, float(auditor_train.completion.mean()), args.batch, device)
-    reward_metrics["uncertainty_test"] = reward_quality(uncertainty, data.test, float(optim_train.completion.mean()), args.batch, device)
+    reward_metrics["optimized_test"] = reward_quality(reward, data.test, float(optim_train.completion.mean()), args.batch, device, train_counts=counts)
+    reward_metrics["auditor_test"] = reward_quality(audit, data.test, float(auditor_train.completion.mean()), args.batch, device, train_counts=counts)
+    reward_metrics["uncertainty_test"] = reward_quality(uncertainty, data.test, float(optim_train.completion.mean()), args.batch, device, train_counts=counts)
     test_results = {}
     test_ndcg = {}
     for name, (policy, alpha, kind) in candidates.items():
