@@ -736,6 +736,13 @@ def run(args) -> dict:
         "seed": args.seed,
         "software": {"python": platform.python_version(), "torch": torch.__version__},
         "parameters": vars(args),
+        "gpt2_trainable_parameters": int(sum(p.numel() for p in base.parameters())),
+        "training_checkpoint_diagnostics": {
+            "gpt2": logs["base"][-1],
+            "reward_optimized": logs["reward"][-1],
+            "reward_uncertainty": logs["uncertainty"][-1],
+            "reward_auditor": logs["auditor"][-1],
+        },
         "reward_quality_on_observed_events": reward_metrics,
         "observed_session_return_proxy_test_only": data.session_proxy,
         "validation": validation, "test": test_results,
