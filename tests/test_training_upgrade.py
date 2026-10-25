@@ -14,15 +14,20 @@ from tlab2.experiment import (dense_autoregressive_loss, reward_validation_mse,
 
 
 def sample_data():
+    contexts = np.asarray([[0, 0, 2, 3, 4],
+                           [0, 2, 3, 4, 5],
+                           [2, 3, 4, 5, 6],
+                           [0, 0, 4, 5, 6]], dtype=np.int32)
+    target_times = np.asarray([100, 200, 300, 400], dtype=np.int64)
+    offsets = np.asarray([50, 40, 30, 20, 10], dtype=np.int64)
+    context_times = np.where(contexts != 0, target_times[:, None] - offsets, -1)
     return Examples(
-        context=np.asarray([[0, 0, 2, 3, 4],
-                            [0, 2, 3, 4, 5],
-                            [2, 3, 4, 5, 6],
-                            [0, 0, 4, 5, 6]], dtype=np.int32),
+        context=contexts,
         target=np.asarray([5, 6, 7, 7], dtype=np.int64),
         completion=np.asarray([.1, .9, .8, .75], dtype=np.float32),
         user=np.asarray([1, 1, 2, 2], dtype=np.int64),
-        timestamp=np.asarray([10, 20, 30, 40], dtype=np.int64),
+        timestamp=target_times,
+        context_timestamps=context_times,
     )
 
 
@@ -34,7 +39,13 @@ def test_dense_loss_uses_all_valid_causal_transitions_and_gradients():
                       [0, 0, 1, 4, 5]], dtype=torch.long)
     y = torch.tensor([5, 6], dtype=torch.long)
     model.train()
-    loss, stats = dense_autoregressive_loss(model, x, y, dense_weight=.75)
+    times = torch.tensor([[-1, -1, 10, 20, 30],
+                          [-1, -1, 10, 20, 30]], dtype=torch.long)
+    end_times = torch.tensor([40, 40], dtype=torch.long)
+    loss, stats = dense_autoregressive_loss(
+        model, x, y, dense_weight=.75,
+        context_timestamps=times, target_timestamps=end_times,
+    )
     assert torch.isfinite(loss)
     # Three valid predicted targets per sequence, including one predicted
     # from an OOV input token. OOV is excluded only as a TARGET.
@@ -119,3 +130,65 @@ def test_reward_fitting_restores_best_observed_validation_mse():
     assert report["n_observed"] == 4
     assert report["smoothed_item_prior_rmse"] >= 0
     assert report["constant_median_mae"] is not None
+
+
+def test_dense_loss_drops_all_tied_time_transitions_but_keeps_strictly_later() -> None:
+    torch.manual_seed(7)
+    base = make_gpt2(vocab_size=16, context_length=5, hidden=32,
+                     layers=1, heads=4)
+    x = torch.tensor([[0, 2, 3, 4, 5]], dtype=torch.long)
+    y = torch.tensor([6], dtype=torch.long)
+    # Tokens 2 and 3 share second=100; tokens 4 and 5 share second=105.
+    times = torch.tensor([[-1, 100, 100, 105, 105]], dtype=torch.long)
+    ts = torch.tensor([110], dtype=torch.long)
+    base.eval()
+    loss, details = dense_autoregressive_loss(
+        base, x, y, dense_weight=.6,
+        context_timestamps=times, target_timestamps=ts
+    )
+    assert torch.isfinite(loss)
+    assert details["causal_transitions"] == 2
+    assert details["same_timestamp_transitions_excluded"] == 2
+    # The unsafe implementation might have trained on two extra arbitrary
+    # intra-bin next-item targets, and the test must catch that.
+    with pytest.raises(ValueError, match="timestamp metadata"):
+        dense_autoregressive_loss(base, x, y, dense_weight=.6)
+    # No metadata is needed when fitting ONLY the supervised final target.
+    next_only, meta = dense_autoregressive_loss(base, x, y, dense_weight=0.0)
+    assert torch.isfinite(next_only)
+    assert meta["causal_transitions"] == 0
+
+
+def test_same_time_targets_in_train_examples_preserve_original_mask(tmp_path):
+    import pandas as pd
+    from tlab2.data import DataConfig, prepare
+    rows = []
+    for user in (1, 2, 3, 4):
+        for timestamp in range(0, 105, 5):
+            rows.append(dict(uid=user, item_id=100 + timestamp // 5 % 6,
+                             timestamp=timestamp, played_ratio_pct=70,
+                             track_length_seconds=100))
+            if timestamp == 50:
+                rows.append(dict(uid=user, item_id=103,
+                                 timestamp=timestamp, played_ratio_pct=95,
+                                 track_length_seconds=100))
+    p = tmp_path / "ties.csv"
+    pd.DataFrame(rows).to_csv(p, index=False)
+    prepared = prepare(p, DataConfig(users=4, vocab_size=16, context_length=8,
+                                      train_events=500, eval_events_per_user=5))
+    assert prepared.train.context_timestamps is not None
+    assert np.all(np.where(prepared.train.context == 0,
+                           prepared.train.context_timestamps == -1,
+                           prepared.train.context_timestamps < prepared.train.timestamp[:, None]))
+    ties = np.any(np.diff(prepared.train.context_timestamps, axis=1) == 0, axis=1)
+    assert ties.any()
+    idx = np.flatnonzero(ties)[0]
+    model = make_gpt2(vocab_size=len(prepared.train_counts), context_length=8,
+                      hidden=32, layers=1, heads=4)
+    _, diag = dense_autoregressive_loss(
+        model, torch.tensor(prepared.train.context[idx:idx + 1], dtype=torch.long),
+        torch.tensor(prepared.train.target[idx:idx + 1], dtype=torch.long),
+        dense_weight=.75,
+        context_timestamps=torch.tensor(prepared.train.context_timestamps[idx:idx + 1], dtype=torch.long),
+        target_timestamps=torch.tensor(prepared.train.timestamp[idx:idx + 1], dtype=torch.long))
+    assert diag["same_timestamp_transitions_excluded"] >= 1
