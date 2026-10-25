@@ -68,3 +68,39 @@ def test_integrity_check_rejects_reranking_change_with_zero_weight(tmp_path):
     p.write_text(json.dumps(data))
     with pytest.raises(AssertionError, match="Zero-reward"):
         checker()(p)
+
+
+def test_integrity_check_rejects_claimed_rl_win_when_reward_model_is_worse_than_constant(tmp_path):
+    data = payload()
+    data["selection_diagnostics"] = {
+        "selected": "rl_completion_h1_kl_0.02", "min_auditor_gain": .001
+    }
+    data["selected_on_validation"] = "rl_completion_h1_kl_0.02"
+    data["reward_quality_on_observed_events"] = {
+        "optimized_valid": {"mae": .19, "constant_mean_mae": .16},
+        "auditor_valid": {"mae": .13, "constant_mean_mae": .15},
+    }
+    data["validation"] = {
+        "gpt2": {"auditor_completion_at_10": .50},
+        "rl_completion_h1_kl_0.02": {"auditor_completion_at_10": .55},
+    }
+    path = tmp_path / "experiment.json"
+    path.write_text(json.dumps(data))
+    with pytest.raises(AssertionError, match="useless observed-feedback model"):
+        checker()(path)
+
+
+def test_integrity_check_rejects_rl_with_subthreshold_gain(tmp_path):
+    data = payload()
+    data["selection_diagnostics"] = {
+        "selected": "rl_completion_h1_kl_0.02", "min_auditor_gain": .001
+    }
+    data["selected_on_validation"] = "rl_completion_h1_kl_0.02"
+    data["validation"] = {
+        "gpt2": {"auditor_completion_at_10": .50},
+        "rl_completion_h1_kl_0.02": {"auditor_completion_at_10": .500005},
+    }
+    path = tmp_path / "experiment.json"
+    path.write_text(json.dumps(data))
+    with pytest.raises(AssertionError, match="sub-threshold"):
+        checker()(path)
