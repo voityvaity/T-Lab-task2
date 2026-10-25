@@ -64,3 +64,11 @@ def test_pareto_frontier_keeps_non_dominated_accuracy_reward_tradeoff():
     tied = pareto_frontier({"gpt2": score(.16, .5),
                            "rl": score(.14, .6)})
     assert {item["model"] for item in tied} == {"gpt2", "rl"}
+
+
+def test_auditor_must_be_better_than_constant_on_observed_validation():
+    options = {"gpt2": score(.10, .4), "rl": score(.10, .9)}
+    result = select_policy(options, auditor_is_useful=False)
+    assert result["selected"] == "gpt2"
+    assert result["reason"] == "auditor_failed_constant_mae_guard"
+    assert result["auditor_beats_constant_validation_mae"] is False
