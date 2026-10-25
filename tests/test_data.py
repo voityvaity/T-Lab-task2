@@ -105,3 +105,15 @@ def test_session_return_proxy_respects_24h_censoring() -> None:
     assert summary["medium_completion"]["n_session_ends"] == 1
     assert summary["medium_completion"]["returned_within_24h"] == 0
     assert summary["high_completion"]["return_rate"] == 0.0
+
+
+def test_unused_nominal_vocab_slots_are_never_recommendable(tmp_path: Path) -> None:
+    path = tmp_path / "events.csv"
+    fake_events().to_csv(path, index=False)
+    # Only nine actual tracks occur in TRAIN, despite a generous vocabulary cap.
+    result = prepare(path, DataConfig(users=8, vocab_size=1000, train_events=300,
+                                       context_length=8, eval_events_per_user=2))
+    assert len(result.train_counts) == len(result.token_to_item) + 2
+    assert len(result.train_counts) < 1000
+    assert np.all(result.train_counts[2:] > 0)
+    assert result.train.target.max() < len(result.train_counts)
