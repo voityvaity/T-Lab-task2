@@ -230,12 +230,22 @@ def real_vs_hypothetical_rollout(policy, sample: Examples, device, steps: int = 
             for i in range(steps)]
 
 
-def bootstrap_delta(chosen: np.ndarray, baseline: np.ndarray, seed: int, draws: int = 400) -> dict:
+def bootstrap_delta(chosen: np.ndarray, baseline: np.ndarray, users: np.ndarray,
+                    seed: int, draws: int = 400) -> dict:
+    """Paired USER-cluster bootstrap (queries from the same user are dependent)."""
     delta = chosen - baseline
+    unique = np.unique(users)
+    groups = [delta[users == uid] for uid in unique]
     rng = np.random.default_rng(seed)
-    samples = rng.choice(delta, size=(draws, len(delta)), replace=True).mean(axis=1)
+    samples = []
+    for _ in range(draws):
+        picked = rng.integers(0, len(groups), size=len(groups))
+        total = sum(float(groups[j].sum()) for j in picked)
+        count = sum(len(groups[j]) for j in picked)
+        samples.append(total / count)
     return {"mean": float(delta.mean()),
-            "ci_95": [float(q) for q in np.quantile(samples, [0.025, 0.975])]}
+            "ci_95": [float(q) for q in np.quantile(samples, [0.025, 0.975])],
+            "bootstrap_unit": "user", "user_clusters": len(unique)}
 
 
 def subset(data: Examples, mask: np.ndarray) -> Examples:
@@ -340,7 +350,7 @@ def run(args) -> dict:
                                 args.batch, rerank_alpha=alpha)
         test_results[name] = result
         test_ndcg[name] = ndcg
-    test_deltas = {name: bootstrap_delta(v, test_ndcg["gpt2"], args.seed)
+    test_deltas = {name: bootstrap_delta(v, test_ndcg["gpt2"], data.test.user, args.seed)
                    for name, v in test_ndcg.items() if name != "gpt2"}
     # Compare open-loop, hypothetical autoregressive five-item behavior.
     rollouts = {name: rollout(policy, data.test, reward, device, args.batch, steps=5, rerank_alpha=alpha)
