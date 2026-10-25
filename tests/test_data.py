@@ -47,6 +47,11 @@ def test_causal_split_and_reproducibility(tmp_path: Path) -> None:
     assert 1.0 in a.train.completion
     save_metadata(a, tmp_path / "outputs")
     assert (tmp_path / "outputs/dataset_protocol.json").is_file()
+    import hashlib
+    assert a.input_file_sha256 == hashlib.sha256(path.read_bytes()).hexdigest()
+    import json
+    info = json.loads((tmp_path / "outputs/dataset_protocol.json").read_text())
+    assert info["input_file_sha256"] == a.input_file_sha256
 
 
 def test_future_item_change_cannot_modify_train_vocabulary(tmp_path: Path) -> None:
