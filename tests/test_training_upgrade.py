@@ -36,9 +36,9 @@ def test_dense_loss_uses_all_valid_causal_transitions_and_gradients():
     model.train()
     loss, stats = dense_autoregressive_loss(model, x, y, dense_weight=.75)
     assert torch.isfinite(loss)
-    # Three known next tokens in first sequence, two in the second;
-    # OOV remains valid input but is never a prediction target.
-    assert stats["causal_transitions"] == 5
+    # Three valid predicted targets per sequence, including one predicted
+    # from an OOV input token. OOV is excluded only as a TARGET.
+    assert stats["causal_transitions"] == 6
     assert stats["dense_ce"] > 0
     loss.backward()
     assert any(p.grad is not None and torch.isfinite(p.grad).all()
