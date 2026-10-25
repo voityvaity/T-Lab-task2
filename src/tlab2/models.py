@@ -108,7 +108,12 @@ def reinforce_step(actor: GPT2LMHeadModel, reference: GPT2LMHeadModel,
     with torch.no_grad():
         completion = reward_model(history, actions)
         reward = shaped_reward(completion, actions, history, counts, durations, kind)
-    advantage = reward - reward.mean()
+    # Leave-one-out batch baseline does not depend on an action's own reward.
+    if reward.numel() > 1:
+        baseline = (reward.sum() - reward) / (reward.numel() - 1)
+    else:
+        baseline = reward.detach()
+    advantage = reward - baseline
     policy_loss = -(advantage.detach() * selected).mean()
     kl = (probs * (logpi - logref)).sum(dim=-1).mean()
     loss = policy_loss + kl_beta * kl
