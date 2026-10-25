@@ -19,7 +19,7 @@ from torch.nn import functional as F
 
 from tlab2.data import DataConfig, Examples, prepare, save_metadata
 from tlab2.baselines import PopularityBaseline, SequentialRulesBaseline, SmoothedTransitionBaseline
-from tlab2.selection import select_policy
+from tlab2.selection import select_policy, pareto_frontier
 from tlab2.diagnostics import actual_five_step_windows
 from tlab2.models import (RewardModel, logits_for_next, make_gpt2, mask_special,
                           reinforce_step, reinforce_rollout_step, trainable_actor)
@@ -485,6 +485,8 @@ def run(args) -> dict:
         "reward_quality_on_observed_events": reward_metrics,
         "observed_session_return_proxy_test_only": data.session_proxy,
         "validation": validation, "test": test_results,
+        "validation_pareto_frontier": pareto_frontier(validation),
+        "test_descriptive_pareto_frontier": pareto_frontier(test_results),
         "test_paired_ndcg_deltas": test_deltas,
         "five_step_hypothetical_rollouts": rollouts,
         "real_context_vs_generated_context_drift": drift,
