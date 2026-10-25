@@ -6,7 +6,7 @@ pytest.importorskip("transformers")
 
 from tlab2.data import Examples
 from tlab2.experiment import bootstrap_delta, evaluate, reward_quality
-from tlab2.models import RewardModel, make_gpt2, reinforce_step, shaped_reward, trainable_actor
+from tlab2.models import RewardModel, make_gpt2, reinforce_step, reinforce_rollout_step, shaped_reward, trainable_actor
 
 
 def test_model_is_gpt2_and_reward_is_conditioned() -> None:
@@ -64,3 +64,23 @@ def test_bootstrap_is_user_clustered() -> None:
     assert np.isclose(result["mean"], 0.2)
     assert result["user_clusters"] == 2
     assert len(result["ci_95"]) == 2
+
+
+def test_multi_step_reinforce_returns_finite_gradients() -> None:
+    model = make_gpt2(vocab_size=16, context_length=5, hidden=32, layers=1, heads=4)
+    rm = RewardModel(model, hidden=32)
+    actor = trainable_actor(model)
+    actor.eval()
+    x = torch.tensor([[0, 0, 2, 3, 4], [0, 3, 4, 5, 6], [0, 2, 4, 6, 8]])
+    counts = torch.ones(16)
+    durations = torch.full((16,), 200.)
+    torch.manual_seed(42)
+    loss, metrics = reinforce_rollout_step(actor, model, rm, x, counts, durations,
+                                           "completion", kl_beta=0.1, horizon=2)
+    assert torch.isfinite(loss)
+    loss.backward()
+    assert metrics["horizon"] == 2
+    assert any(p.grad is not None for p in actor.parameters())
+    with pytest.raises(ValueError):
+        reinforce_rollout_step(actor, model, rm, x, counts, durations,
+                               "completion", kl_beta=0.1, horizon=0)
