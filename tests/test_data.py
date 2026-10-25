@@ -38,7 +38,10 @@ def test_causal_split_and_reproducibility(tmp_path: Path) -> None:
     assert np.all(a.valid.timestamp < a.boundaries["valid_end"])
     assert np.all(a.test.timestamp >= a.boundaries["valid_end"])
     assert a.coverage["test"] < 1.0
-    assert np.all(a.train.target >= 2) and np.all(a.test.target >= 2)
+    assert np.all(a.train.target >= 2)
+    # Next-item evaluation includes OOV targets as unavoidable misses.
+    assert np.all(a.test.target >= 1)
+    assert np.any(a.test.target == 1)
     assert a.train.context.shape[1] == 8
     assert np.all((a.train.completion >= 0) & (a.train.completion <= 1))
     assert 1.0 in a.train.completion
@@ -102,8 +105,9 @@ def test_session_return_proxy_respects_24h_censoring() -> None:
     assert summary["low_completion"]["returned_within_24h"] == 1
     assert summary["high_completion"]["n_session_ends"] == 1
     assert summary["high_completion"]["returned_within_24h"] == 0
-    assert summary["medium_completion"]["n_session_ends"] == 1
-    assert summary["medium_completion"]["returned_within_24h"] == 0
+    # Final event cannot have a complete 24h observation horizon and is censored.
+    assert summary["medium_completion"]["n_session_ends"] == 0
+    assert summary["medium_completion"]["return_rate"] is None
     assert summary["high_completion"]["return_rate"] == 0.0
 
 
@@ -117,3 +121,16 @@ def test_unused_nominal_vocab_slots_are_never_recommendable(tmp_path: Path) -> N
     assert len(result.train_counts) < 1000
     assert np.all(result.train_counts[2:] > 0)
     assert result.train.target.max() < len(result.train_counts)
+
+
+def test_oov_targets_are_counted_in_evaluation_denominators(tmp_path: Path) -> None:
+    path = tmp_path / "events.csv"
+    fake_events().to_csv(path, index=False)
+    result = prepare(path, DataConfig(users=8, vocab_size=11,
+                                       context_length=8, train_events=500,
+                                       eval_events_per_user=20))
+    # Future-only item IDs have token=1 and MUST remain in held-out queries.
+    assert np.any(result.test.target == 1)
+    expected = float(np.mean(result.test.target >= 2))
+    assert result.coverage["test_evaluation_target_in_vocab"] == pytest.approx(expected)
+    assert expected < 1
