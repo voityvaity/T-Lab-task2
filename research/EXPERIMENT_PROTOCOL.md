@@ -54,7 +54,7 @@ GPT-2 обучается с нуля по train cross-entropy, лучший chec
 
 ## 6. Валидационный выбор и test
 
-Настраивать `reward`, `β`, `horizon`, `rerank alpha` **только по validation**; до начала работы с test модель выбирается по наибольшему auditor reward при соблюдении *обоих* лимитов падения NDCG: **не более 5% относительно GPT-2** и **не более 0.005 абсолютного NDCG**. Нужен положительный прирост auditor score и успешный MAE guard. Иначе победитель — GPT-2.
+Настраивать `reward`, `β`, `horizon`, `rerank alpha` **только по validation**; до начала работы с test модель выбирается по наибольшему auditor reward при соблюдении *обоих* лимитов падения NDCG: **не более 5% относительно GPT-2** и **не более 0.005 абсолютного NDCG**. Нужен прирост auditor score **более 0.001** доли дослушивания и **оба** MAE guard: optimized RM и auditor RM должны превосходить свои константные TRAIN-mean baselines по MAE на validation. Это эвристика отсечения численно малых разниц, не формальная статистическая значимость. Иначе победитель — GPT-2. Порог уточнён **после синтетического smoke, но до первого реального эксперимента Yambda**, см. [SMOKE_AUDIT_2026-10-26.md](SMOKE_AUDIT_2026-10-26.md).
 
 **Test не влияет на выбор.** Сохранить таблицу метрик всех моделей и descriptive test Pareto frontier: это прозрачность, не новый hyperparameter search. Нельзя выделять post-hoc победителя по тестовой NDCG.
 
@@ -76,7 +76,8 @@ GPT-2 обучается с нуля по train cross-entropy, лучший chec
 
 ## 9. Чеклист выпуска
 
-- [ ] GitHub manual smoke succeeded: pip check, compileall, pytest, end-to-end tiny fit, `check_smoke.py`, source-tagged report, SVG charts.
+- [x] Первичный GitHub manual smoke на `06b5baa` — 44 tests passed, small fit and artifact saved. Это не проверка нового selection guard.
+- [ ] Повторный smoke на текущем HEAD после изменения selection guard.
 - [ ] First Yambda pilot succeeded; input file hash / artifact / SHA / logs confirmed.
 - [ ] Real trained checkpoints, validation and test tables, RM MAE and calibration bins available.
 - [ ] All RL/rerank/popularity/transition alternatives evaluated under the same protocol and no test-time winner picking.
