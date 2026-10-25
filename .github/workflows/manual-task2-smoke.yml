@@ -32,6 +32,9 @@ jobs:
             --base-steps 3 --reward-steps 3 --rl-steps 2 \
             --rewards completion,balanced --betas 0.02 --rerank-alphas 0,1 \
             --eval-per-user 2 --cpu
+      - name: Build measured offline Markdown report
+        if: success()
+        run: python scripts/build_report.py --input outputs/smoke/experiment.json --output outputs/smoke/REPORT.md
       - name: Upload smoke results (NOT REAL Yambda measurements)
         if: always()
         uses: actions/upload-artifact@v4
