@@ -20,6 +20,7 @@ from torch.nn import functional as F
 from tlab2.data import DataConfig, Examples, prepare, save_metadata
 from tlab2.baselines import PopularityBaseline, SequentialRulesBaseline
 from tlab2.selection import select_policy
+from tlab2.diagnostics import actual_five_step_windows
 from tlab2.models import (RewardModel, logits_for_next, make_gpt2, mask_special,
                           reinforce_step, reinforce_rollout_step, trainable_actor)
 
@@ -244,15 +245,12 @@ def real_vs_hypothetical_rollout(policy, sample: Examples, device, reward: Rewar
             logits.scatter_(1, top, adjusted)
         return F.softmax(logits, dim=-1)
 
-    by_user = {}
-    for i, uid in enumerate(sample.user.tolist()):
-        by_user.setdefault(uid, []).append(i)
+    # Require actual consecutive actions; the last K saved test events per user
+    # are not always consecutive in raw logs (ties and earlier filtering).
+    windows = actual_five_step_windows(sample, steps=steps)
     js_by_step = [[] for _ in range(steps)]
     hit_by_step = [[] for _ in range(steps)]
-    for idx in by_user.values():
-        idx = sorted(idx, key=lambda j: int(sample.timestamp[j]))
-        if len(idx) < steps:
-            continue
+    for idx in windows:
         context = torch.as_tensor(sample.context[idx[0]][None, :], device=device, dtype=torch.long)
         for i in range(steps):
             real_context = torch.as_tensor(sample.context[idx[i]][None, :], device=device, dtype=torch.long)
@@ -267,6 +265,7 @@ def real_vs_hypothetical_rollout(policy, sample: Examples, device, reward: Rewar
             generated = pred_free.argmax(dim=-1, keepdim=True)
             context = torch.cat([context[:, 1:], generated], dim=1)
     return [{"step": i + 1, "paired_trajectories": len(js_by_step[i]),
+             "trajectory_definition": "strict_consecutive_no_tied_timestamps",
              "js_divergence_from_real_context": float(np.mean(js_by_step[i])) if js_by_step[i] else None,
              "free_rollout_real_next_hit_at_10": float(np.mean(hit_by_step[i])) if hit_by_step[i] else None}
             for i in range(steps)]
@@ -459,6 +458,7 @@ def run(args) -> dict:
         "test_paired_ndcg_deltas": test_deltas,
         "five_step_hypothetical_rollouts": rollouts,
         "real_context_vs_generated_context_drift": drift,
+        "real_five_step_windows": len(actual_five_step_windows(data.test, steps=5)),
         "limitations": ["Top-N train-only catalog rather than entire Yambda",
                         "Observed-only feedback; no reliable counterfactual reward",
                         "Main/uncertainty heads share training users but vary initialization; auditor trained on held-out train users with shared frozen encoder",
