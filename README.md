@@ -1,6 +1,6 @@
 # T-Lab 2026 · Task 2: RL для последовательных рекомендаций
 
-**Статус на 25.10.2026: исследовательская реализация расширена по итогам сравнения с опубликованными работами; подтверждённых запусков GitHub Actions и численных результатов Yambda пока нет.** Этот репозиторий — самостоятельное решение задания №2 Академии Т-Банка. Задание №1 находится в другом репозитории и не подменяет результаты этой работы.
+**Статус на 25.10.2026: проведена дополнительная существенная доработка модели, валидации, контролей и научного отчёта. Изолированные проверки алгоритмов выбора и пятишагового контроля локально прошли (9 тестов), но весь репозиторий и обучение на реальной Yambda в GitHub Actions ещё не запускались. Результатов реального эксперимента пока нет.** Этот репозиторий — самостоятельное решение задания №2 Академии Т-Банка. Задание №1 находится в другом репозитории и не подменяет результаты этой работы.
 
 ## Исследовательский вопрос
 
@@ -22,12 +22,12 @@
 
 1. **Глобальный временной split.** Train, validation, test образуют последовательные непересекающиеся интервалы. Все пользователи имеют одинаковые абсолютные cutoffs. Для каждого оцениваемого события контекст состоит только из ранее наблюдавшихся событий, включая предшествующие события текущего тестового периода при прекаузальной (prequential) оценке.
 2. **GPT-2 from scratch.** Causal Transformer (GPT-2 architecture), token = идентификатор трека, задача next-item cross-entropy; `PAD=0`, `OOV=1`. При левом дополнении явно пересчитываем `position_ids` только по реальным токенам, отдельно от `attention_mask`. Размеры слоёв, длина контекста, выборки, seed и версии библиотек фиксируются в конфигурации запусков.
-3. **Reward model.** Три отдельные reward-head на одном замороженном GPT-2 encoder: основная и вторая (с иной инициализацией) задают эвристику штрафа за disagreement; третья обучается на непересекающихся TRAIN-пользователях для аудита. Отдельные головы **не гарантируют** надёжного контрфактического reward. Качество проверяется на реальных наблюдавшихся воспроизведениях; MAE и RMSE сравниваются с константой.
-4. **Контроль без RL.** Popularity, собственные облегчённые Sequential Rules, исходный GPT-2 и post-hoc reranking top-M по log-prob + reward. Одинаковые test queries, train-only каталог и единые метрики. Наши Sequential Rules — **не** точное воспроизведение официального Spotify PCTM/SeqRules.
-5. **RL.** On-policy REINFORCE с batch-baseline и регуляризацией KL(`policy || frozen GPT-2`). Изменяем KL-штраф и саму функцию reward; все гиперпараметры подбираются **только по validation**, тест раскрывается один раз после выбора вариантов.
+3. **Reward model.** Три отдельные reward-head на одном замороженном GPT-2 encoder: основная и вторая (с иной инициализацией) задают эвристику штрафа за disagreement; третья обучается на непересекающихся TRAIN-пользователях для аудита. Отдельные головы **не гарантируют** надёжного контрфактического reward. Качество проверяется на реальных наблюдавшихся воспроизведениях; MAE и RMSE сравниваются с константой. Дополнительно публикуются десять бинов калибровки регрессии и MAE для редких/популярных по TRAIN треков.
+4. **Контроль без RL.** Popularity, собственные облегчённые Sequential Rules и Smoothed Transition (сглаженные многолаговые переходы), исходный GPT-2 и post-hoc reranking top-M по log-prob + reward. Одинаковые test queries, train-only каталог и единые метрики. Наши Sequential Rules — **не** точное воспроизведение официального Spotify PCTM/SeqRules.
+5. **RL.** On-policy REINFORCE с leave-one-out baseline и регуляризацией KL(`policy || frozen GPT-2`). Меняем KL-штраф, reward и горизонт. GPT-2 предварительно сохраняется по минимальной validation cross-entropy. Выбор RL-кандидата: рост независимого auditor reward при относительной потере validation NDCG не более 5% **и** абсолютной не более 0.005; без подтверждения прироста остаётся GPT-2. Тест раскрывается только после выбора.
 6. **Функции награды.** `completion`, `watch_time`, `balanced` и `conservative` (минимум предсказаний двух reward-head). Последняя — эвристика чувствительности к неопределённости, **не ROLeR и не калиброванная граница**. Все proxy нельзя считать доказанной долгосрочной удовлетворённостью.
 7. **Оценка.** Recall@10 и NDCG@10 при one-next-item ground truth (Recall становится HitRate): основные знаменатели включают все отобранные будущие события, в том числе OOV (нулевой hit); условные метрики для in-vocabulary доступны отдельно. Средняя предсказанная награда и, по возможности, независимая диагностическая reward model; catalog coverage, unique items/user, доля повторов, item popularity, concentration, item-length distribution, KL к исходной политике.
-8. **Пять шагов.** Teacher-forced контексты из реальной истории сравниваются со свободной генерацией, где рекомендованные треки добавляются в контекст *гипотетически*. Это **не** реальные пользовательские прослушивания. Измеряем рост расхождения предсказаний/сдвигов и явно показываем влияние допущений.
+8. **Пять шагов.** Teacher-forced контексты из реальной истории сравниваются со свободной генерацией, где рекомендованные треки добавляются в контекст *гипотетически*. Это **не** реальные пользовательские прослушивания. Измеряем рост расхождения предсказаний/сдвигов и явно показываем влияние допущений. Для сравнения с реально наблюдавшимися событиями принимаются лишь **строго последовательные** пятёрки без пропусков и одинаковых временных меток; число таких окон обязательно указывается.
 9. **Долгосрочная цель.** В отчёт включается наблюдаемая доля возвращений в течение 24 часов после окончания сессии (перерыв больше 30 минут), с правым цензурированием: брать только события с доступным полным горизонтом. Связь с долей дослушивания носит **ассоциативный, не причинный** характер. Для вывода об улучшении retention нужен онлайн A/B-тест или пригодные randomized logs.
 
 ## Правила научной добросовестности
@@ -47,7 +47,11 @@
 - `src/tlab2/data.py`: потоковое чтение Parquet, общие временные границы, выбор пользователей по TRAIN, словарь только из TRAIN, reservoir-sampling обучающих примеров, OOV-контексты и честные OOV-промахи в оценке, защита от событий с одинаковой пятисекундной меткой.
 - `src/tlab2/models.py`: GPT2LMHeadModel **с нуля**, reward head на замороженных GPT-2 признаках (контекст + item), одношаговый и пятишаговый REINFORCE (гипотетические переходы), дисконтированную награду и точный policy KL к исходному GPT-2.
 - `src/tlab2/experiment.py`: обучение GPT-2, трёх reward-head (основная/uncertainty на одном TRAIN-пуле, auditor — на другом), четыре вида reward, два горизонта RL, разные KL, reranking по log-prob, baseline-метрики, user-cluster bootstrap, многократная генерация и JS-divergence.
-- `src/tlab2/baselines.py`: train-only Popularity и простая последовательная модель переходов для контроля мощности GPT-2.
+- `src/tlab2/baselines.py`: train-only Popularity, Sequential Rules и многолаговая сглаженная статистика переходов. Это собственные приближённые модели, не точные реализации Spotify PCTM.
+- `src/tlab2/selection.py`: заранее зафиксированный детерминированный выбор по validation c относительным и абсолютным пределом потерь, Pareto frontier для анализа.
+- `src/tlab2/diagnostics.py`: строгая проверка смежности пяти реально наблюдавшихся событий и защита от пропусков между событиями.
+- `scripts/check_smoke.py`: проверяет, что синтетический workflow действительно исполнил все основные варианты моделей и не пропустил пятишаговую проверку.
+- `scripts/plot_tradeoff.py`: автоматически строит отдельные SVG-графики компромисса NDCG/auditor reward для validation и test.
 - `research/RELATED_WORK_AND_ABLATIONS.md`: научный обзор, конкретное происхождение идей, ограничения точности и план абляций.
 - `tests/`: тесты причинного time split, RL-градиентов, uncertain reward, простых baseline, session-return proxy и запрета выдавать synthetic smoke за реальные результаты.
 - `.github/workflows/`: **только ручные** smoke и настоящий Yambda-run. До запуска этих workflow нельзя называть код испытанным или результаты измеренными.
@@ -62,7 +66,10 @@ Python 3.11+:
 python -m pip install -e ".[train,download,dev]"
 pytest -q
 python scripts/make_synthetic.py --users 8 --events 90
-python -m tlab2.experiment --data data/synthetic_listens.csv --source-kind synthetic --output outputs/smoke --users 8 --vocab 64 --context 12 --hidden 32 --layers 1 --heads 4 --batch 4 --base-steps 3 --reward-steps 3 --rl-steps 2 --train-events 300 --rewards completion,balanced --betas 0.02 --cpu
+python -m tlab2.experiment --data data/synthetic_listens.csv --source-kind synthetic --output outputs/smoke --users 8 --vocab 64 --context 12 --hidden 32 --layers 1 --heads 4 --batch 4 --base-steps 6 --reward-steps 5 --rl-steps 3 --train-events 300 --eval-per-user 6 --rewards completion,balanced,conservative --betas 0.02 --rl-horizons 1,5 --rerank-alphas 0,1 --cpu
+python scripts/check_smoke.py --input outputs/smoke/experiment.json
+python scripts/build_report.py --input outputs/smoke/experiment.json --output outputs/smoke/REPORT.md
+python scripts/plot_tradeoff.py --input outputs/smoke/experiment.json --outdir outputs/smoke
 ```
 
 Этот синтетический прогон проверяет связность программ, **а не реальное качество алгоритма**.
@@ -74,13 +81,13 @@ hf download yandex/yambda flat/50m/listens.parquet --repo-type dataset --revisio
 python -m tlab2.experiment --data data/flat/50m/listens.parquet --source-kind yambda --output outputs/yambda --users 128 --vocab 4096 --context 32 --train-events 30000 --base-steps 500 --reward-steps 200 --rl-steps 100
 ```
 
-Для эксперимента на GPU PyTorch автоматически выберет CUDA при её доступности. На обычном CPU подобный прогон может требовать значительного времени, длительность не гарантируется. Сохраняются `dataset_protocol.json`, `experiment.json`, `training_logs.json` и checkpoints моделей. Ручные workflows также сохраняют `requirements-frozen.txt` и `source-git-sha.txt` для воспроизводимости. Отчёт отказывается принимать противоречащие друг другу `source_kind` и `status`. Программы не считают «негативами» треки без зарегистрированного отклика.
+Для эксперимента на GPU PyTorch автоматически выберет CUDA при её доступности. На обычном CPU подобный прогон может требовать значительного времени, длительность не гарантируется. Сохраняются `dataset_protocol.json` (включая SHA-256 точного исходного файла), `experiment.json`, `training_logs.json`, SVG-графики trade-off, `REPORT.md` и checkpoints моделей. Ручные workflows также сохраняют `requirements-frozen.txt` и `source-git-sha.txt` для воспроизводимости. Отчёт отказывается принимать противоречащие друг другу `source_kind` и `status`. Программы не считают «негативами» треки без зарегистрированного отклика.
 
 **Без собственного запуска:** в GitHub Actions имеются [Manual Task 2 smoke](https://github.com/voityvaity/T-Lab-task2/actions/workflows/manual-task2-smoke.yml) и [Manual Yambda-50M RL research](https://github.com/voityvaity/T-Lab-task2/actions/workflows/manual-yambda-research.yml). Обе задачи запускаются только вручную. Сначала тестируем synthetic smoke; реальный CPU pilot расходует GitHub Actions minutes и тоже требует ручного запуска. В режиме **pilot** проверяются `completion` и `conservative` с одним KL и одношаговым RL; режим **research** проверяет четыре вида reward, два KL и пятишаговую оптимизацию. Оба режима требуют ручного запуска и расходуют Actions minutes.
 
 ### Что обязательно проверить после реального обучения
 
-Помимо NDCG/Recall и reward — RM против константного baseline по MAE, расхождение optimized/auditor RM, рост популярности, долю повторов, широту каталога, распределение длительностей и кривую деградации при пятишаговой генерации. Настройка допустимой потери NDCG и выбор метода происходят на validation, не на test. На итоговые значения влияют урезанный train-каталог и отсутствие настоящих случайных показов.
+Помимо NDCG/Recall и reward — RM против константного baseline по MAE, расхождение optimized/auditor RM, рост популярности, долю повторов, широту каталога, распределение длительностей и кривую деградации при пятишаговой генерации. Порог потери NDCG зафиксирован до теста: одновременно не более 5% относительного снижения и не более 0.005 абсолютного. Выбор метода проводится только на validation, не на test. Итоговый график тестовой Pareto-границы исключительно описателен. На итоговые значения влияют урезанный train-каталог и отсутствие настоящих случайных показов.
 
 ## Исходные работы
 
