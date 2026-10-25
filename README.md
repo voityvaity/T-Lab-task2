@@ -1,6 +1,6 @@
 # T-Lab 2026 · Task 2: RL для последовательных рекомендаций
 
-**Статус: исследование в разработке; подтверждённых результатов обучения пока нет.** Этот репозиторий — самостоятельное решение задания №2 Академии Т-Банка. Задание №1 находится в другом репозитории и не подменяет результаты этой работы.
+**Статус: первая версия исходного кода написана; GitHub Actions и реальные эксперименты пока не запускались, научные результаты пока не подтверждены.** Этот репозиторий — самостоятельное решение задания №2 Академии Т-Банка. Задание №1 находится в другом репозитории и не подменяет результаты этой работы.
 
 ## Исследовательский вопрос
 
@@ -38,9 +38,43 @@
 
 Обученные checkpoints base/reward/RL, пригодные для повторного запуска команды, таблицы MAE/NDCG/Recall/reward/coverage/KL/повторов, график Pareto-компромисса, исследование reward hacking и пятишаговой генерации, полный отчёт с ограничениями и ссылками на реальные GitHub Actions artifacts. **Ничего из этого не помечается выполненным до фактического запуска.**
 
-## Предварительный план реализации
+## Что уже реализовано в коде (но пока не проверено запуском)
 
-Сначала воспроизводимый обработчик Yambda + unit tests + очень маленький синтетический smoke; затем GPT-2 и reward model; далее RL и корректные ablations; только после этого измерения на настоящих данных. Обычные GitHub-hosted runners — CPU, поэтому многократное обучение GPT-2 на больших данных может потребовать GPU; избегаем автоматического расхода GitHub Actions minutes.
+- `src/tlab2/data.py`: потоковое чтение Parquet, общие временные границы, выбор пользователей по TRAIN, словарь только из TRAIN, reservoir-sampling примеров, OOV-контексты, защита от событий с одинаковой пятисекундной меткой.
+- `src/tlab2/models.py`: GPT2LMHeadModel **с нуля**, reward head на замороженных GPT-2 признаках (контекст + item), REINFORCE и точный policy KL к исходному GPT-2.
+- `src/tlab2/experiment.py`: обучение базовой модели, двух reward heads на непересекающихся train-пользователях, три формы reward, два KL-коэффициента, переранжирование, проверка по validation, тест после выбора, user-cluster bootstrap, отклонение пятишаговой генерации от реальной истории.
+- `tests/`: регрессионные тесты и проверка основных форм/градиентов.
+- `.github/workflows/`: **только ручные** smoke и настоящий Yambda-run. До запуска этих workflow нельзя называть код испытанным или результаты измеренными.
+
+**Отчёт намеренно не содержит придуманных метрик.** Следующие шаги — выполнить smoke, исправить найденные ошибки, провести реальные эксперименты на нескольких seeds, сохранить артефакты, дополнить анализ и только после этого готовить окончательный конкурсный README.
+
+## Воспроизведение и запуск
+
+Python 3.11+:
+
+```bash
+python -m pip install -e ".[train,download,dev]"
+pytest -q
+python scripts/make_synthetic.py --users 8 --events 90
+python -m tlab2.experiment --data data/synthetic_listens.csv --output outputs/smoke --users 8 --vocab 64 --context 12 --hidden 32 --layers 1 --heads 4 --batch 4 --base-steps 3 --reward-steps 3 --rl-steps 2 --train-events 300 --rewards completion,balanced --betas 0.02 --cpu
+```
+
+Этот синтетический прогон проверяет связность программ, **а не реальное качество алгоритма**.
+
+Реальный Yambda-50M (не загружаем большие файлы в Git):
+
+```bash
+hf download yandex/yambda flat/50m/listens.parquet --repo-type dataset --revision e8b04458db77e2fb30a24e65f78923fa48b7d297 --local-dir data
+python -m tlab2.experiment --data data/flat/50m/listens.parquet --output outputs/yambda --users 128 --vocab 4096 --context 32 --train-events 30000 --base-steps 500 --reward-steps 200 --rl-steps 100
+```
+
+Для эксперимента на GPU PyTorch автоматически выберет CUDA при её доступности. На обычном CPU подобный прогон может требовать значительного времени, длительность не гарантируется. Сохраняются `dataset_protocol.json`, `experiment.json`, `training_logs.json` и checkpoints моделей. Программы не считают «негативами» треки без зарегистрированного отклика.
+
+**Без собственного запуска:** в GitHub Actions имеются [Manual Task 2 smoke](https://github.com/voityvaity/T-Lab-task2/actions/workflows/manual-task2-smoke.yml) и [Manual Yambda-50M RL research](https://github.com/voityvaity/T-Lab-task2/actions/workflows/manual-yambda-research.yml). Обе задачи запускаются только вручную. Сначала тестируем synthetic smoke; реальный CPU pilot расходует GitHub Actions minutes и тоже требует ручного запуска.
+
+### Что обязательно проверить после реального обучения
+
+Помимо NDCG/Recall и reward — RM против константного baseline по MAE, расхождение optimized/auditor RM, рост популярности, долю повторов, широту каталога, распределение длительностей и кривую деградации при пятишаговой генерации. Настройка допустимой потери NDCG и выбор метода происходят на validation, не на test. На итоговые значения влияют урезанный train-каталог и отсутствие настоящих случайных показов.
 
 ## Исходные работы
 
