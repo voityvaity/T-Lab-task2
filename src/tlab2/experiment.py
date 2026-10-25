@@ -496,12 +496,12 @@ def run(args) -> dict:
                   "context", "hidden", "layers", "heads", "train_events", "eval_per_user"):
         if getattr(args, field) < 1:
             raise ValueError(f"{field} must be strictly positive")
+    if args.batch < 2:
+        raise ValueError("REINFORCE requires batch >= 2 for nonzero leave-one-out advantages")
     if not 0 <= args.dense_weight <= 1:
         raise ValueError("dense_weight must be in [0,1]")
     if args.reward_prior_smoothing <= 0 or args.sft_patience < 1 or args.reward_patience < 1:
         raise ValueError("Reward prior smoothing and patience must be strictly positive")
-    if args.batch < 2:
-        raise ValueError("REINFORCE requires batch >= 2 for nonzero leave-one-out advantages")
     if args.hidden % args.heads:
         raise ValueError("GPT-2 hidden width must be divisible by attention heads")
     if not 0 < args.train_fraction < 1 or not 0 < args.valid_fraction < 1 - args.train_fraction:
