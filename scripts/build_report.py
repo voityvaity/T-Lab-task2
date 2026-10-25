@@ -58,6 +58,27 @@ def report(result_path: Path) -> str:
         "Conditional NDCG показывает качество только по доступным целям, "
         "поэтому не заменяет основную оценку.", "",
     ]
+    if data.get("selection_diagnostics"):
+        sel = data["selection_diagnostics"]
+        lines += ["## Зафиксированный выбор политики на validation", "",
+                  f"- Победитель: \`{sel['selected']}\`.",
+                  f"- Validation NDCG baseline: {metric(sel['baseline_ndcg'])}; "
+                  f"минимально допустимый NDCG: {metric(sel['ndcg_floor'])}.",
+                  f"- Допущено снижение не более {metric(sel['max_relative_ndcg_drop'] * 100)}% "
+                  f"и одновременно не более {metric(sel['max_absolute_ndcg_drop'])} абсолютных NDCG.",
+                  f"- Решение: \`{sel['reason']}\`. Здесь нет онлайн-оценки.", ""]
+    for split in ("validation", "test"):
+        frontier = data.get(f"{split}_pareto_frontier", [])
+        if split == "test":
+            frontier = data.get("test_descriptive_pareto_frontier", [])
+        if frontier:
+            lines += [f"## {split.upper()}: недоминируемые конфигурации (описательно)", "",
+                      "Ось X — NDCG@10, ось Y — независимая аудиторская оценка "
+                      "дослушивания. **Test-фронтир не используется для выбора модели.**", ""]
+            lines += [table(["Модель", "NDCG@10", "Auditor completion"],
+                            [[row["model"], metric(row["ndcg_at_10"]),
+                              metric(row["auditor_completion_at_10"])]
+                             for row in frontier]), ""]
     for split in ("validation", "test"):
         lines += [f"## {split.upper()} — один следующий реальный item", ""]
         rows = []
@@ -87,6 +108,29 @@ def report(result_path: Path) -> str:
                          "Возвратов за 24 ч", "Доля возвратов"],
                         [[key, str(x["n_session_ends"]), str(x["returned_within_24h"]),
                           metric(x["return_rate"])] for key, x in proxy.items()]), ""]
+    if "reward_quality_on_observed_events" in data:
+        lines += ["## Калибровка награды на наблюдавшихся прослушиваниях", "",
+                  "Диапазоны predicted completion разбиты на 10 интервалов, "
+                  "показаны доля реально дослушанного и абсолютная ошибка. "
+                  "Калибровка на наблюдавшихся событиях **не гарантирует** "
+                  "качества на новых предложениях.", ""]
+        for name, result in data["reward_quality_on_observed_events"].items():
+            if not isinstance(result, dict):
+                continue
+            lines += [f"### {name}", ""]
+            buckets = result.get("calibration_bins", [])
+            if buckets:
+                lines += [table(["Бин", "Объектов", "Средний прогноз", "Средний факт", "MAE"],
+                                [[str(row["bin"]), str(row["count"]),
+                                  metric(row["mean_predicted"]),
+                                  metric(row["mean_observed"]), metric(row["mae"])]
+                                 for row in buckets]), ""]
+            groups = result.get("mae_by_training_popularity")
+            if groups:
+                lines += [table(["Train-популярность", "Наблюдений", "MAE", "Средний факт"],
+                                [[key, str(value["observations"]), metric(value["mae"]),
+                                  metric(value["mean_observed"])]
+                                 for key, value in groups.items()]), ""]
     lines += ["## Парные пользовательские bootstrap-интервалы разницы Test NDCG@10", ""]
     delta = data["test_paired_ndcg_deltas"]
     lines += [table(["Модель − GPT2", "Средняя разница", "95% CI", "Кластеров"],
@@ -99,6 +143,11 @@ def report(result_path: Path) -> str:
         lines += [table(["Шаг", "Предсказанное дослушивание", "Повтор в текущем контексте"],
                         [[str(row["step"]), metric(row["mean_predicted_completion"]),
                           metric(row["repeat_of_context_rate"])] for row in curve]), ""]
+    window_count = data.get("real_five_step_windows", 0)
+    lines += [f"**Проверенных последовательных пятишаговых траекторий: {window_count}.**",
+              "Пропущенные либо совпадающие по времени события не считаются "
+              "действительно соседними. При нуле траекторий динамика по "
+              "реальным историям не может быть оценена.", ""]
     for name, curve in data["real_context_vs_generated_context_drift"].items():
         lines += [f"### Расхождение реальной и гипотетической истории: {name}", ""]
         lines += [table(["Шаг", "Траекторий", "JS-divergence", "Hit@10 с вымышленным контекстом"],
