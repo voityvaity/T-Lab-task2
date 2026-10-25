@@ -27,10 +27,22 @@ def make_gpt2(vocab_size: int, context_length: int, hidden: int = 96,
     return GPT2LMHeadModel(conf)
 
 
+def _history_mask_and_positions(context: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Align GPT-2 absolute positions to non-PAD tokens in left-padded histories.
+
+    Padding is never counted as a user event. For a sequence with 3 actual
+    listens, their positions are 0, 1, 2 regardless of left-padding length.
+    """
+    attention_mask = (context != 0).long()
+    position_ids = (attention_mask.cumsum(-1) - 1).clamp(min=0)
+    return attention_mask, position_ids
+
+
 def logits_for_next(policy: GPT2LMHeadModel, context: torch.Tensor) -> torch.Tensor:
     """Predict the next token from a left-padded real-event history."""
-    attention_mask = (context != 0).long()
-    result = policy(input_ids=context, attention_mask=attention_mask, return_dict=True)
+    attention_mask, position_ids = _history_mask_and_positions(context)
+    result = policy(input_ids=context, attention_mask=attention_mask,
+                    position_ids=position_ids, return_dict=True)
     return result.logits[:, -1, :]
 
 
@@ -61,8 +73,10 @@ class RewardModel(nn.Module):
     def forward(self, context: torch.Tensor, item: torch.Tensor) -> torch.Tensor:
         """item shape (B,) or (B, M), output corresponding (B,) or (B, M)."""
         with torch.no_grad():
+            attention_mask, position_ids = _history_mask_and_positions(context)
             hidden = self.encoder.transformer(
-                input_ids=context, attention_mask=(context != 0).long(), return_dict=True
+                input_ids=context, attention_mask=attention_mask,
+                position_ids=position_ids, return_dict=True
             ).last_hidden_state[:, -1, :].detach()
             item_embedding = self.encoder.transformer.wte(item).detach()
         if item.ndim == 2:
