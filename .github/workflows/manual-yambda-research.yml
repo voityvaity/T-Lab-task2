@@ -66,6 +66,9 @@ jobs:
             --rewards completion,watch_time,balanced \
             --betas 0.02,0.2 --rerank-alphas 0,1,3 \
             --cpu
+      - name: Build measured offline Markdown report
+        if: success()
+        run: python scripts/build_report.py --input outputs/yambda/experiment.json --output outputs/yambda/REPORT.md
       - name: Upload research artifacts
         if: always()
         uses: actions/upload-artifact@v4
