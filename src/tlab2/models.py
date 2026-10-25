@@ -73,10 +73,19 @@ class RewardModel(nn.Module):
 
 def shaped_reward(pred_completion: torch.Tensor, actions: torch.Tensor,
                   context: torch.Tensor, counts: torch.Tensor, durations: torch.Tensor,
-                  kind: str = "completion") -> torch.Tensor:
+                  kind: str = "completion",
+                  second_completion: torch.Tensor | None = None) -> torch.Tensor:
     """All reward statistics are computed from training data only."""
     if kind == "completion":
         return pred_completion
+    if kind == "conservative":
+        if second_completion is None:
+            raise ValueError("Conservative reward requires a separately fitted second head")
+        # A heuristic lower-confidence-style proxy, not a calibrated bound:
+        # penalize disagreements between independently initialized heads.
+        return (pred_completion + second_completion) / 2 - 0.5 * (
+            pred_completion - second_completion
+        ).abs()
     if kind == "watch_time":
         return pred_completion * durations[actions].clamp(min=0, max=600) / 600.0
     if kind == "balanced":
@@ -91,7 +100,8 @@ def shaped_reward(pred_completion: torch.Tensor, actions: torch.Tensor,
 def reinforce_step(actor: GPT2LMHeadModel, reference: GPT2LMHeadModel,
                    reward_model: RewardModel, history: torch.Tensor,
                    counts: torch.Tensor, durations: torch.Tensor,
-                   kind: str, kl_beta: float) -> tuple[torch.Tensor, dict]:
+                   kind: str, kl_beta: float,
+                   uncertainty_model: RewardModel | None = None) -> tuple[torch.Tensor, dict]:
     """On-policy one-step REINFORCE; exact KL over admissible item vocabulary.
 
     Sampled reward is detached (fixed simulator); batch-centered REINFORCE
@@ -107,7 +117,10 @@ def reinforce_step(actor: GPT2LMHeadModel, reference: GPT2LMHeadModel,
     selected = logpi.gather(1, actions.unsqueeze(1)).squeeze(1)
     with torch.no_grad():
         completion = reward_model(history, actions)
-        reward = shaped_reward(completion, actions, history, counts, durations, kind)
+        other = (uncertainty_model(history, actions)
+                 if kind == "conservative" and uncertainty_model is not None else None)
+        reward = shaped_reward(completion, actions, history, counts, durations, kind,
+                               second_completion=other)
     # Leave-one-out batch baseline does not depend on an action's own reward.
     if reward.numel() > 1:
         baseline = (reward.sum() - reward) / (reward.numel() - 1)
@@ -126,7 +139,9 @@ def reinforce_rollout_step(actor: GPT2LMHeadModel, reference: GPT2LMHeadModel,
                            reward_model: RewardModel, history: torch.Tensor,
                            counts: torch.Tensor, durations: torch.Tensor,
                            kind: str, kl_beta: float, horizon: int = 5,
-                           gamma: float = 0.9) -> tuple[torch.Tensor, dict]:
+                           gamma: float = 0.9,
+                           uncertainty_model: RewardModel | None = None
+                           ) -> tuple[torch.Tensor, dict]:
     """Policy-gradient on hypothetical recommendations, not observed transitions.
 
     A generated action is appended to the context as if it were consumed. The
@@ -152,7 +167,10 @@ def reinforce_rollout_step(actor: GPT2LMHeadModel, reference: GPT2LMHeadModel,
         selected = logpi.gather(1, action.unsqueeze(1)).squeeze(1)
         with torch.no_grad():
             completion = reward_model(context, action)
-            r = shaped_reward(completion, action, context, counts, durations, kind)
+            other = (uncertainty_model(context, action)
+                     if kind == "conservative" and uncertainty_model is not None else None)
+            r = shaped_reward(completion, action, context, counts, durations, kind,
+                              second_completion=other)
             is_repeat = (context == action[:, None]).any(dim=1).float()
         log_selected.append(selected)
         rewards.append(r)
