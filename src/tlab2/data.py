@@ -301,5 +301,8 @@ def save_metadata(bundle: DataBundle, output: str | Path) -> None:
             "effective_vocab_size": len(bundle.train_counts),
             "observed_session_return_proxy_test_only": bundle.session_proxy,
             "selected_train_user_cohort_sha256": bundle.train_cohort_sha256,
-            "input_file_sha256": bundle.input_file_sha256}
+            "input_file_sha256": bundle.input_file_sha256,
+            "session_timestamp_units": "seconds_quantized_to_5_seconds",
+            "session_gap_seconds": 1800,
+            "session_return_horizon_seconds": 86400}
     (root / "dataset_protocol.json").write_text(json.dumps(info, indent=2, ensure_ascii=False), encoding="utf-8")
