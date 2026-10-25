@@ -133,6 +133,8 @@ def evaluate(policy, sample: Examples, reward: RewardModel, audit: RewardModel,
     lengths = []
     rm_pred = []
     rm_audit = []
+    disagreement = []
+    top1 = []
     expected_listened_seconds = []
     for x, y, _ in batches(sample, batch_size, device, seed=0, shuffle=False):
         logits = mask_special(policy_logits(policy, x))
@@ -151,6 +153,7 @@ def evaluate(policy, sample: Examples, reward: RewardModel, audit: RewardModel,
             hits.append(float(len(found) != 0))
             scores.append(float(1.0 / np.log2(int(found[0]) + 2)) if len(found) else 0.0)
         recommended.extend(top.cpu().tolist())
+        top1.extend(top[:, 0].cpu().tolist())
         repeated.extend((top.unsqueeze(-1) == x.unsqueeze(1)).any(dim=-1).float().mean(dim=-1).cpu().tolist())
         popularity.extend(torch.log1p(counts[top].float()).mean(dim=-1).cpu().tolist())
         lengths.extend(durations[top].float().mean(dim=-1).cpu().tolist())
@@ -158,7 +161,9 @@ def evaluate(policy, sample: Examples, reward: RewardModel, audit: RewardModel,
         predicted = reward(x, top)
         rm_pred.extend(predicted.mean(dim=1).cpu().tolist())
         expected_listened_seconds.extend((predicted * durations[top].clamp(min=0, max=600)).mean(dim=1).cpu().tolist())
-        rm_audit.extend(audit(x, top).mean(dim=1).cpu().tolist())
+        second = audit(x, top)
+        rm_audit.extend(second.mean(dim=1).cpu().tolist())
+        disagreement.extend((predicted - second).abs().mean(dim=1).cpu().tolist())
     all_rec = np.asarray(recommended, dtype=np.int64)
     return ({
         "queries": len(scores), "recall_at_10": float(np.mean(hits)),
@@ -167,6 +172,8 @@ def evaluate(policy, sample: Examples, reward: RewardModel, audit: RewardModel,
         "predicted_capped_listen_seconds_at_10": float(np.mean(expected_listened_seconds)),
         "auditor_completion_at_10": float(np.mean(rm_audit)),
         "auditor_minus_optimized": float(np.mean(np.asarray(rm_audit) - np.asarray(rm_pred))),
+        "rm_absolute_disagreement_at_10": float(np.mean(disagreement)),
+        "most_common_top1_share": float(np.unique(top1, return_counts=True)[1].max() / max(1, len(top1))),
         "repeated_from_history_rate": float(np.mean(repeated)),
         "distinct_recommended_items": int(len(np.unique(all_rec))),
         "catalog_coverage": float(len(np.unique(all_rec)) / max(1, (counts > 0).sum().item())),
@@ -308,6 +315,13 @@ def run(args) -> dict:
     logs["reward"] = train_reward(reward, optim_train, args.reward_steps, args.batch,
                                   device, args.reward_lr, args.seed + 1)
     torch.save(reward.head.state_dict(), out / "reward_head.pt")
+    # Second reward head with separate initialization and sample order. Both
+    # heads see only the reward-training users; the audit head below remains
+    # reserved for diagnostic comparison, and is not used to optimize RL.
+    uncertainty = RewardModel(base, args.hidden).to(device)
+    logs["uncertainty"] = train_reward(uncertainty, optim_train, args.reward_steps,
+                                      args.batch, device, args.reward_lr, args.seed + 29)
+    torch.save(uncertainty.head.state_dict(), out / "uncertainty_head.pt")
     audit = RewardModel(base, args.hidden).to(device)
     logs["auditor"] = train_reward(audit, auditor_train, args.reward_steps, args.batch,
                                    device, args.reward_lr, args.seed + 2)
@@ -315,6 +329,7 @@ def run(args) -> dict:
     reward_metrics = {
         "optimized_valid": reward_quality(reward, data.valid, float(optim_train.completion.mean()), args.batch, device),
         "auditor_valid": reward_quality(audit, data.valid, float(auditor_train.completion.mean()), args.batch, device),
+        "uncertainty_valid": reward_quality(uncertainty, data.valid, float(optim_train.completion.mean()), args.batch, device),
         "auditor_train_user_disjoint": True,
     }
     base_valid, _ = evaluate(base, data.valid, reward, audit, counts, durations, device, args.batch)
@@ -340,11 +355,13 @@ def run(args) -> dict:
                         optimizer.zero_grad(set_to_none=True)
                         if horizon == 1:
                             loss, metrics = reinforce_step(actor, base, reward, x, counts,
-                                                           durations, reward_kind, beta)
+                                                           durations, reward_kind, beta,
+                                                           uncertainty_model=uncertainty)
                         else:
                             loss, metrics = reinforce_rollout_step(actor, base, reward, x, counts,
                                                                    durations, reward_kind, beta,
-                                                                   horizon=horizon)
+                                                                   horizon=horizon,
+                                                                   uncertainty_model=uncertainty)
                         loss.backward()
                         torch.nn.utils.clip_grad_norm_(actor.parameters(), 1.0)
                         optimizer.step()
@@ -382,6 +399,7 @@ def run(args) -> dict:
     # All test evaluation happens after validation-only model selection.
     reward_metrics["optimized_test"] = reward_quality(reward, data.test, float(optim_train.completion.mean()), args.batch, device)
     reward_metrics["auditor_test"] = reward_quality(audit, data.test, float(auditor_train.completion.mean()), args.batch, device)
+    reward_metrics["uncertainty_test"] = reward_quality(uncertainty, data.test, float(optim_train.completion.mean()), args.batch, device)
     test_results = {}
     test_ndcg = {}
     for name, (policy, alpha, kind) in candidates.items():
@@ -418,7 +436,7 @@ def run(args) -> dict:
         "real_context_vs_generated_context_drift": drift,
         "limitations": ["Top-N train-only catalog rather than entire Yambda",
                         "Observed-only feedback; no reliable counterfactual reward",
-                        "Two reward heads use disjoint train users but shared encoder",
+                        "Main/uncertainty heads share training users but vary initialization; auditor trained on held-out train users with shared frozen encoder",
                         "Generated items inserted hypothetically, without feedback simulation",
                         "All absolute metrics conditional on targets inside train vocabulary"]
     }
@@ -447,7 +465,7 @@ def main() -> None:
     p.add_argument("--reward-lr", type=float, default=0.001)
     p.add_argument("--rl-lr", type=float, default=0.00003)
     p.add_argument("--seed", type=int, default=42)
-    p.add_argument("--rewards", default="completion,watch_time,balanced")
+    p.add_argument("--rewards", default="completion,watch_time,balanced,conservative")
     p.add_argument("--betas", default="0.02,0.2")
     p.add_argument("--rl-horizons", default="1,5", help="Compare myopic and hypothetical multi-step policy gradients")
     p.add_argument("--rerank-alphas", default="0,1,3")
