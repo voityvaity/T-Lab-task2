@@ -56,3 +56,26 @@ def select_policy(
                    if eligible else "no_candidate_passed_reward_and_ndcg_guards"),
         "independent_online_effect_established": False,
     }
+
+
+def pareto_frontier(validation: dict[str, dict[str, float]]) -> list[dict]:
+    """Non-dominated models under (NDCG@10, independent auditor reward).
+
+    Report-only. A test Pareto frontier must never be used for choosing
+    training parameters or deciding which experiment to run next.
+    """
+    rows = []
+    for name, score in validation.items():
+        x = float(score["ndcg_at_10"])
+        y = float(score["auditor_completion_at_10"])
+        if math.isfinite(x) and math.isfinite(y):
+            rows.append((name, x, y))
+    nondominated = []
+    for name, x, y in rows:
+        if not any(
+            xx >= x and yy >= y and (xx > x or yy > y)
+            for rival, xx, yy in rows if rival != name
+        ):
+            nondominated.append({"model": name, "ndcg_at_10": x,
+                                 "auditor_completion_at_10": y})
+    return sorted(nondominated, key=lambda row: (-row["ndcg_at_10"], row["model"]))
