@@ -50,8 +50,8 @@ def validate_smoke_results(path: Path) -> dict:
     if "optimized_valid" in qualities and "auditor_valid" in qualities:
         for model in ("optimized_valid", "auditor_valid"):
             row = qualities[model]
-            if row["mae"] >= row["constant_mean_mae"] and data["selected_on_validation"] != "gpt2":
-                raise AssertionError(f"Selected RL despite useless observed-feedback model: {model}")
+            if row["rmse"] >= row["constant_mean_rmse"] and data["selected_on_validation"] != "gpt2":
+                raise AssertionError(f"Selected RL despite useless observed-feedback expected-reward model: {model}")
     if data["selected_on_validation"] != "gpt2":
         baseline = data["validation"]["gpt2"]["auditor_completion_at_10"]
         winner = data["validation"][data["selected_on_validation"]]["auditor_completion_at_10"]
