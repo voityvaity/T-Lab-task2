@@ -137,7 +137,7 @@ def test_supervised_validation_loss_ignores_oov_target() -> None:
     assert np.isfinite(metric)
     logs = train_base(model, train, steps=2, batch_size=2,
                       device=torch.device("cpu"), learning_rate=0.001,
-                      seed=42, validation=validation)
+                      seed=42, validation=validation, dense_weight=0.0)
     assert any(row.get("checkpoint_selection") == "minimum_in_vocab_validation_ce"
                for row in logs)
     assert model.training is False
