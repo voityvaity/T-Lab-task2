@@ -51,11 +51,20 @@ def report(result_path: Path) -> str:
                     [[name, metric(item["mae"]), metric(item["constant_mean_mae"]),
                       metric(item["rmse"]), metric(item["constant_mean_rmse"]), metric(item["n_observed"])]
                      for name, item in q.items() if isinstance(item, dict)]), ""]
+    lines += [
+        "**Основные** Recall/NDCG учитывают выбранные будущие события вне обучающего "
+        "каталога как неизбежные промахи. В отдельной колонке приведено покрытие "
+        "всех оцениваемых целей train-only каталогом. "
+        "Conditional NDCG показывает качество только по доступным целям, "
+        "поэтому не заменяет основную оценку.", "",
+    ]
     for split in ("validation", "test"):
         lines += [f"## {split.upper()} — один следующий реальный item", ""]
         rows = []
         for name, item in data[split].items():
             rows.append([name, metric(item["recall_at_10"]), metric(item["ndcg_at_10"]),
+                         metric(item["target_catalog_coverage"]),
+                         metric(item["conditional_ndcg_at_10"]),
                          metric(item["predicted_completion_at_10"]),
                          metric(item["auditor_completion_at_10"]),
                          metric(item["predicted_capped_listen_seconds_at_10"]),
@@ -63,7 +72,8 @@ def report(result_path: Path) -> str:
                          metric(item["catalog_coverage"]),
                          metric(item["rm_absolute_disagreement_at_10"]),
                          metric(item["most_common_top1_share"])])
-        lines += [table(["Модель", "Recall@10", "NDCG@10", "Optimized RM",
+        lines += [table(["Модель", "Recall@10", "NDCG@10", "Target coverage",
+                         "Conditional NDCG@10", "Optimized RM",
                          "Auditor RM", "Watch sec", "History repeats", "Catalog coverage",
                          "RM disagreement", "Top1 concentration"], rows), ""]
     proxy = data.get("observed_session_return_proxy_test_only", {})
