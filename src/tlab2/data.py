@@ -178,30 +178,34 @@ def prepare(path: str | Path, cfg: DataConfig) -> DataBundle:
         history: deque[int] = deque(maxlen=cfg.context_length)
         user_valid: deque = deque(maxlen=cfg.eval_events_per_user)
         user_test: deque = deque(maxlen=cfg.eval_events_per_user)
-        for event in group.itertuples(index=False):
-            ts = int(event.timestamp)
-            token = raw_to_token.get(int(event.item_id), 1)
-            split = "train" if ts < t_train else ("valid" if ts < t_valid else "test")
-            if split != "train":
-                total[split] += 1
-                eligible[split] += int(token >= 2)
-            if token >= 2 and len(history) >= cfg.min_history:
-                seq = ([0] * (cfg.context_length - len(history))) + list(history)
-                ratio = min(1.0, max(0.0, float(event.played_ratio_pct) / 100))
-                entry = (seq, token, ratio, int(uid), ts)
-                if split == "train":
-                    train_total += 1
-                    if len(train_rows) < cfg.train_events:
-                        train_rows.append(entry)
+        # All events within the same 5-second timestamp have unknown ordering:
+        # evaluate against strictly earlier timestamps, then update the history.
+        for ts, tick in group.groupby("timestamp", sort=True):
+            pending = []
+            for event in tick.itertuples(index=False):
+                token = raw_to_token.get(int(event.item_id), 1)
+                split = "train" if ts < t_train else ("valid" if ts < t_valid else "test")
+                if split != "train":
+                    total[split] += 1
+                    eligible[split] += int(token >= 2)
+                if token >= 2 and len(history) >= cfg.min_history:
+                    seq = ([0] * (cfg.context_length - len(history))) + list(history)
+                    ratio = min(1.0, max(0.0, float(event.played_ratio_pct) / 100))
+                    entry = (seq, token, ratio, int(uid), int(ts))
+                    if split == "train":
+                        train_total += 1
+                        if len(train_rows) < cfg.train_events:
+                            train_rows.append(entry)
+                        else:
+                            j = rng.randrange(train_total)
+                            if j < cfg.train_events:
+                                train_rows[j] = entry
+                    elif split == "valid":
+                        user_valid.append(entry)
                     else:
-                        j = rng.randrange(train_total)
-                        if j < cfg.train_events:
-                            train_rows[j] = entry
-                elif split == "valid":
-                    user_valid.append(entry)
-                else:
-                    user_test.append(entry)
-            history.append(token)  # Includes OOV and past real valid/test events.
+                        user_test.append(entry)
+                pending.append(token)
+            history.extend(pending)
         valid_rows.extend(user_valid)
         test_rows.extend(user_test)
     if not train_rows or not valid_rows or not test_rows:
