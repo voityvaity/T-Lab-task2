@@ -14,6 +14,7 @@ def select_policy(
     max_relative_ndcg_drop: float = 0.05,
     max_absolute_ndcg_drop: float = 0.005,
     min_auditor_gain: float = 0.0,
+    auditor_is_useful: bool = True,
 ) -> dict:
     if baseline not in validation:
         raise ValueError("Baseline missing from validation results")
@@ -37,7 +38,8 @@ def select_policy(
         reward = float(scores["auditor_completion_at_10"])
         if not (math.isfinite(ndcg) and math.isfinite(reward)):
             continue
-        if ndcg >= floor and reward > b_reward + min_auditor_gain and name != baseline:
+        if (auditor_is_useful and ndcg >= floor
+                and reward > b_reward + min_auditor_gain and name != baseline):
             eligible.append((name, ndcg, reward))
     # Reward improvement is required to switch away from the baseline.
     # Equal-reward ties favour higher ranking accuracy then lexical identity.
@@ -51,9 +53,11 @@ def select_policy(
         "max_relative_ndcg_drop": max_relative_ndcg_drop,
         "max_absolute_ndcg_drop": max_absolute_ndcg_drop,
         "min_auditor_gain": min_auditor_gain,
+        "auditor_beats_constant_validation_mae": bool(auditor_is_useful),
         "eligible_alternatives": [x[0] for x in eligible],
-        "reason": ("auditor_reward_gain_with_both_ndcg_guards"
-                   if eligible else "no_candidate_passed_reward_and_ndcg_guards"),
+        "reason": ("auditor_failed_constant_mae_guard" if not auditor_is_useful
+                   else "auditor_reward_gain_with_both_ndcg_guards" if eligible
+                   else "no_candidate_passed_reward_and_ndcg_guards"),
         "independent_online_effect_established": False,
     }
 
