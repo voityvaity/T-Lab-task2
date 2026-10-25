@@ -195,13 +195,25 @@ def rollout(policy, sample: Examples, reward: RewardModel, device, batch_size: i
 
 
 @torch.no_grad()
-def real_vs_hypothetical_rollout(policy, sample: Examples, device, steps: int = 5) -> list[dict]:
+def real_vs_hypothetical_rollout(policy, sample: Examples, device, reward: RewardModel,
+                                 steps: int = 5, rerank_alpha: float | None = None) -> list[dict]:
     """Compare free-running fictional contexts with recorded real-event contexts.
 
     Selected eligible test events may have intervening OOV events. This is a
     descriptive distribution-drift diagnostic, not an estimate of user responses.
     """
     policy.eval()
+    reward.eval()
+    def predict(context: torch.Tensor) -> torch.Tensor:
+        logits = mask_special(logits_for_next(policy, context))
+        if rerank_alpha is not None:
+            top = logits.topk(min(50, logits.size(-1) - 2), dim=-1).indices
+            adjusted = logits.gather(1, top) + rerank_alpha * reward(context, top)
+            original = logits
+            logits = torch.full_like(original, torch.finfo(original.dtype).min)
+            logits.scatter_(1, top, adjusted)
+        return F.softmax(logits, dim=-1)
+
     by_user = {}
     for i, uid in enumerate(sample.user.tolist()):
         by_user.setdefault(uid, []).append(i)
@@ -214,8 +226,8 @@ def real_vs_hypothetical_rollout(policy, sample: Examples, device, steps: int = 
         context = torch.as_tensor(sample.context[idx[0]][None, :], device=device, dtype=torch.long)
         for i in range(steps):
             real_context = torch.as_tensor(sample.context[idx[i]][None, :], device=device, dtype=torch.long)
-            pred_free = F.softmax(mask_special(logits_for_next(policy, context)), dim=-1)
-            pred_real = F.softmax(mask_special(logits_for_next(policy, real_context)), dim=-1)
+            pred_free = predict(context)
+            pred_real = predict(real_context)
             mixture = 0.5 * (pred_free + pred_real)
             js = 0.5 * (F.kl_div(mixture.clamp(min=1e-12).log(), pred_free, reduction="sum") +
                         F.kl_div(mixture.clamp(min=1e-12).log(), pred_real, reduction="sum"))
@@ -356,7 +368,7 @@ def run(args) -> dict:
     rollouts = {name: rollout(policy, data.test, reward, device, args.batch, steps=5, rerank_alpha=alpha)
                 for name, (policy, alpha, kind) in candidates.items()
                 if name == "gpt2" or name == selected or (name.startswith("rl_") and kind == "completion")}
-    drift = {name: real_vs_hypothetical_rollout(policy, data.test, device)
+    drift = {name: real_vs_hypothetical_rollout(policy, data.test, device, reward, rerank_alpha=alpha)
              for name, (policy, alpha, kind) in candidates.items()
              if name == "gpt2" or name == selected}
     results = {
