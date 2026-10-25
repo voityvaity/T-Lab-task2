@@ -241,7 +241,10 @@ def prepare(path: str | Path, cfg: DataConfig) -> DataBundle:
                 if split != "train":
                     total[split] += 1
                     eligible[split] += int(token >= 2)
-                if token >= 2 and len(history) >= cfg.min_history:
+                # Validation/test must retain unknown future objects as misses.
+                # Otherwise Recall/NDCG silently reward the policy for an easier,
+                # artificially filtered set of interactions. TRAIN cannot fit OOV.
+                if len(history) >= cfg.min_history and (token >= 2 or split != "train"):
                     seq = ([0] * (cfg.context_length - len(history))) + list(history)
                     ratio = min(1.0, max(0.0, float(event.played_ratio_pct) / 100))
                     entry = (seq, token, ratio, int(uid), int(ts))
@@ -265,6 +268,14 @@ def prepare(path: str | Path, cfg: DataConfig) -> DataBundle:
         raise ValueError("At least one train/validation/test example required; adjust subcatalog/sample")
     sessions = summarize_session_returns(df, t_valid, last)
     coverage = {name: eligible[name] / max(1, total[name]) for name in ("valid", "test")}
+    # Directly relevant metric denominators are the capped event-level
+    # evaluation queries, which include OOV targets encoded as token 1.
+    coverage["valid_evaluation_target_in_vocab"] = (
+        sum(row[1] >= 2 for row in valid_rows) / len(valid_rows)
+    ) if valid_rows else 0.0
+    coverage["test_evaluation_target_in_vocab"] = (
+        sum(row[1] >= 2 for row in test_rows) / len(test_rows)
+    ) if test_rows else 0.0
     coverage.update({name + "_eligible": eligible[name] for name in ("valid", "test")})
     coverage.update({name + "_total": total[name] for name in ("valid", "test")})
     return DataBundle(_to_examples(train_rows, cfg.context_length), _to_examples(valid_rows, cfg.context_length),
