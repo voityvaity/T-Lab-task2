@@ -245,22 +245,26 @@ def policy_logits(policy, context: torch.Tensor) -> torch.Tensor:
 @torch.no_grad()
 def reward_quality(model: RewardModel, sample: Examples, prior_mean: float,
                    batch_size: int, device,
-                   train_counts: torch.Tensor | None = None) -> dict:
+                   train_counts: torch.Tensor | None = None,
+                   prior_median: float | None = None) -> dict:
     model.eval()
     predictions = []
     labels = []
+    prior_preds = []
     popularity = []
     for x, y, label in batches(sample, batch_size, device, seed=0, shuffle=False):
         eligible = y >= 2
         if eligible.any():
             predictions.extend(model(x[eligible], y[eligible]).cpu().tolist())
             labels.extend(label[eligible].cpu().tolist())
+            prior_preds.extend(model.prior(y[eligible]).cpu().tolist())
             if train_counts is not None:
                 popularity.extend(train_counts[y[eligible]].cpu().tolist())
     if not labels:
         raise ValueError("No in-catalog observed items available for reward-model evaluation")
     pred = np.asarray(predictions)
     actual = np.asarray(labels)
+    item_prior = np.asarray(prior_preds)
     # Regression reliability diagram: equal-width bins, not classification
     # ECE. Both predicted and real completion fractions belong to [0, 1].
     bin_index = np.minimum((pred * 10).astype(np.int64), 9)
@@ -286,6 +290,11 @@ def reward_quality(model: RewardModel, sample: Examples, prior_mean: float,
             }
     return {"calibration_bins": reliability,
             "mae_by_training_popularity": by_popularity,
+            "smoothed_item_prior_mae": float(np.abs(item_prior - actual).mean()),
+            "smoothed_item_prior_rmse": float(np.sqrt(np.square(item_prior - actual).mean())),
+            "constant_median_mae": (
+                float(np.abs(actual - prior_median).mean())
+                if prior_median is not None else None),
             "mae": float(np.abs(pred - actual).mean()),
             "rmse": float(np.sqrt(np.square(pred - actual).mean())),
             "constant_mean_mae": float(np.abs(actual - prior_mean).mean()),
