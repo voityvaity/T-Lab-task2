@@ -18,7 +18,7 @@ import torch
 from torch.nn import functional as F
 
 from tlab2.data import DataConfig, Examples, prepare, save_metadata
-from tlab2.baselines import PopularityBaseline, SequentialRulesBaseline
+from tlab2.baselines import PopularityBaseline, SequentialRulesBaseline, SmoothedTransitionBaseline
 from tlab2.selection import select_policy
 from tlab2.diagnostics import actual_five_step_windows
 from tlab2.models import (RewardModel, logits_for_next, make_gpt2, mask_special,
@@ -410,6 +410,7 @@ def run(args) -> dict:
     simple = {
         "popularity": PopularityBaseline(data.train_counts),
         "sequential_rules": SequentialRulesBaseline(data.train, data.train_counts),
+        "smoothed_transition": SmoothedTransitionBaseline(data.train, data.train_counts),
     }
     for name, model in simple.items():
         metrics, _ = evaluate(model, data.valid, reward, audit, counts, durations,
