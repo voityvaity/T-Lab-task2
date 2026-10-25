@@ -486,6 +486,10 @@ def run(args) -> dict:
         validation, max_relative_ndcg_drop=args.max_relative_ndcg_drop,
         max_absolute_ndcg_drop=args.max_absolute_ndcg_drop,
         min_auditor_gain=args.min_auditor_gain,
+        auditor_is_useful=(
+            reward_metrics["auditor_valid"]["mae"]
+            < reward_metrics["auditor_valid"]["constant_mean_mae"]
+        ),
     )
     selected = selection["selected"]
     # Simple, TRAIN-only controls; not eligible for RL configuration selection.
