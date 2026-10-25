@@ -58,6 +58,7 @@ class DataBundle:
     config: DataConfig
     session_proxy: dict[str, dict]
     train_cohort_sha256: str
+    input_file_sha256: str
 
 
 def _scan_stats(path: Path) -> tuple[int, int, Counter]:
@@ -184,6 +185,12 @@ def summarize_session_returns(
 def prepare(path: str | Path, cfg: DataConfig) -> DataBundle:
     """Read real events, split globally by time and sample only past-aware examples."""
     path = Path(path)
+    # Exact dataset provenance: streaming hash, independent of file size.
+    checksum = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1 << 20), b""):
+            checksum.update(chunk)
+    input_sha256 = checksum.hexdigest()
     if cfg.users < 1 or cfg.vocab_size < 4 or cfg.context_length < 1 or cfg.train_events < 1 or cfg.eval_events_per_user < 1:
         raise ValueError("users, vocab_size, context_length and train_events must be positive")
     if cfg.min_history < 1 or not (0 < cfg.train_fraction < 1) or not (0 < cfg.valid_fraction < 1 - cfg.train_fraction):
@@ -281,7 +288,7 @@ def prepare(path: str | Path, cfg: DataConfig) -> DataBundle:
     return DataBundle(_to_examples(train_rows, cfg.context_length), _to_examples(valid_rows, cfg.context_length),
                       _to_examples(test_rows, cfg.context_length), token_to_item, item_counts, item_seconds,
                       coverage, {"first": first, "last": last, "train_end": t_train, "valid_end": t_valid}, cfg,
-                      sessions, cohort_sha256)
+                      sessions, cohort_sha256, input_sha256)
 
 
 def save_metadata(bundle: DataBundle, output: str | Path) -> None:
@@ -293,5 +300,6 @@ def save_metadata(bundle: DataBundle, output: str | Path) -> None:
             "mapped_items": len(bundle.token_to_item),
             "effective_vocab_size": len(bundle.train_counts),
             "observed_session_return_proxy_test_only": bundle.session_proxy,
-            "selected_train_user_cohort_sha256": bundle.train_cohort_sha256}
+            "selected_train_user_cohort_sha256": bundle.train_cohort_sha256,
+            "input_file_sha256": bundle.input_file_sha256}
     (root / "dataset_protocol.json").write_text(json.dumps(info, indent=2, ensure_ascii=False), encoding="utf-8")
