@@ -19,7 +19,7 @@ from torch.nn import functional as F
 
 from tlab2.data import DataConfig, Examples, prepare, save_metadata
 from tlab2.models import (RewardModel, logits_for_next, make_gpt2, mask_special,
-                          reinforce_step, trainable_actor)
+                          reinforce_step, reinforce_rollout_step, trainable_actor)
 
 
 def seed_all(seed: int) -> None:
@@ -318,28 +318,36 @@ def run(args) -> dict:
     for reward_kind in args.rewards.split(","):
         for beta_str in args.betas.split(","):
             beta = float(beta_str)
-            tag = f"rl_{reward_kind}_kl_{beta:g}"
-            actor = trainable_actor(base).to(device)
-            actor.train()
-            optimizer = torch.optim.AdamW(actor.parameters(), lr=args.rl_lr)
-            history = []
-            step = 0
-            while step < args.rl_steps:
-                for x, _, _ in batches(data.train, args.batch, device, args.seed + step):
-                    optimizer.zero_grad(set_to_none=True)
-                    loss, metrics = reinforce_step(actor, base, reward, x, counts, durations, reward_kind, beta)
-                    loss.backward()
-                    torch.nn.utils.clip_grad_norm_(actor.parameters(), 1.0)
-                    optimizer.step()
-                    step += 1
-                    if step % max(1, args.rl_steps // 10) == 0 or step == 1:
-                        history.append({"step": step, **metrics})
-                    if step >= args.rl_steps:
-                        break
-            actor.eval()
-            rl_logs[tag] = history
-            candidates[tag] = (actor, None, reward_kind)
-            torch.save(actor.state_dict(), out / (tag + ".pt"))
+            for horizon_str in args.rl_horizons.split(","):
+                horizon = int(horizon_str)
+                tag = f"rl_{reward_kind}_h{horizon}_kl_{beta:g}"
+                actor = trainable_actor(base).to(device)
+                actor.train()
+                optimizer = torch.optim.AdamW(actor.parameters(), lr=args.rl_lr)
+                history = []
+                step = 0
+                while step < args.rl_steps:
+                    for x, _, _ in batches(data.train, args.batch, device, args.seed + step):
+                        optimizer.zero_grad(set_to_none=True)
+                        if horizon == 1:
+                            loss, metrics = reinforce_step(actor, base, reward, x, counts,
+                                                           durations, reward_kind, beta)
+                        else:
+                            loss, metrics = reinforce_rollout_step(actor, base, reward, x, counts,
+                                                                   durations, reward_kind, beta,
+                                                                   horizon=horizon)
+                        loss.backward()
+                        torch.nn.utils.clip_grad_norm_(actor.parameters(), 1.0)
+                        optimizer.step()
+                        step += 1
+                        if step % max(1, args.rl_steps // 10) == 0 or step == 1:
+                            history.append({"step": step, **metrics})
+                        if step >= args.rl_steps:
+                            break
+                actor.eval()
+                rl_logs[tag] = history
+                candidates[tag] = (actor, None, reward_kind)
+                torch.save(actor.state_dict(), out / (tag + ".pt"))
     logs["rl"] = rl_logs
     validation = {}
     for name, (policy, alpha, kind) in candidates.items():
@@ -417,6 +425,7 @@ def main() -> None:
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--rewards", default="completion,watch_time,balanced")
     p.add_argument("--betas", default="0.02,0.2")
+    p.add_argument("--rl-horizons", default="1,5", help="Compare myopic and hypothetical multi-step policy gradients")
     p.add_argument("--rerank-alphas", default="0,1,3")
     p.add_argument("--allowed-ndcg-drop", type=float, default=0.01)
     p.add_argument("--cpu", action="store_true")
