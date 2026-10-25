@@ -1,0 +1,75 @@
+name: Manual Yambda-50M RL research (CPU-intensive)
+
+on:
+  workflow_dispatch:
+    inputs:
+      users:
+        description: "Number of training-eligible users (pilot 64, larger >= 128)"
+        type: choice
+        options: ["64", "128", "256"]
+        default: "64"
+      vocab:
+        description: "Train-only catalog size including PAD/OOV"
+        type: choice
+        options: ["1024", "2048", "4096"]
+        default: "2048"
+      training:
+        description: "Compute budget"
+        type: choice
+        options: ["pilot", "research"]
+        default: "pilot"
+
+permissions:
+  contents: read
+
+jobs:
+  yambda:
+    runs-on: ubuntu-latest
+    timeout-minutes: 110
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies and test
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[train,download,dev]"
+          pytest -q
+      - name: Download real, version-pinned Yambda-50M
+        run: |
+          hf download yandex/yambda flat/50m/listens.parquet \
+            --repo-type dataset \
+            --revision e8b04458db77e2fb30a24e65f78923fa48b7d297 \
+            --local-dir data
+      - name: Set controlled computational budget
+        shell: bash
+        run: |
+          if [ "${{ inputs.training }}" = "research" ]; then
+            echo "BASE_STEPS=600" >> "$GITHUB_ENV"
+            echo "REWARD_STEPS=300" >> "$GITHUB_ENV"
+            echo "RL_STEPS=180" >> "$GITHUB_ENV"
+          else
+            echo "BASE_STEPS=120" >> "$GITHUB_ENV"
+            echo "REWARD_STEPS=80" >> "$GITHUB_ENV"
+            echo "RL_STEPS=40" >> "$GITHUB_ENV"
+          fi
+      - name: Fit supervised GPT-2, reward models, RL variants, evaluate
+        run: |
+          python -m tlab2.experiment \
+            --data data/flat/50m/listens.parquet \
+            --output outputs/yambda \
+            --users "${{ inputs.users }}" --vocab "${{ inputs.vocab }}" \
+            --base-steps "$BASE_STEPS" --reward-steps "$REWARD_STEPS" \
+            --rl-steps "$RL_STEPS" --train-events 30000 \
+            --batch 32 --context 32 --eval-per-user 5 \
+            --rewards completion,watch_time,balanced \
+            --betas 0.02,0.2 --rerank-alphas 0,1,3 \
+            --cpu
+      - name: Upload research artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: task2-yambda-cpu-${{ inputs.training }}-${{ inputs.users }}
+          path: outputs/yambda
+          retention-days: 14
