@@ -48,6 +48,9 @@ jobs:
       - name: Build measured offline Markdown report
         if: success()
         run: python scripts/build_report.py --input outputs/smoke/experiment.json --output outputs/smoke/REPORT.md
+      - name: Plot NDCG/reward tradeoffs from measured artifacts
+        if: success()
+        run: python scripts/plot_tradeoff.py --input outputs/smoke/experiment.json --outdir outputs/smoke
       - name: Upload smoke results (NOT REAL Yambda measurements)
         if: always()
         uses: actions/upload-artifact@v4
