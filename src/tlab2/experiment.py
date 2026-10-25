@@ -346,7 +346,9 @@ def run(args) -> dict:
                 horizon = int(horizon_str)
                 tag = f"rl_{reward_kind}_h{horizon}_kl_{beta:g}"
                 actor = trainable_actor(base).to(device)
-                actor.train()
+                # Disable stochastic dropout while measuring exact policy/ref KL;
+                # eval() changes dropout behavior, not gradient computation.
+                actor.eval()
                 optimizer = torch.optim.AdamW(actor.parameters(), lr=args.rl_lr)
                 history = []
                 step = 0
