@@ -66,7 +66,20 @@ def report(result_path: Path) -> str:
                   f"минимально допустимый NDCG: {metric(sel['ndcg_floor'])}.",
                   f"- Допущено снижение не более {metric(sel['max_relative_ndcg_drop'] * 100)}% "
                   f"и одновременно не более {metric(sel['max_absolute_ndcg_drop'])} абсолютных NDCG.",
+                  f"- Минимальный прирост аудитора: {metric(sel.get('min_auditor_gain'))} (эвристический порог).",
+                  f"- Optimized RM превосходит константу на validation: {sel.get('optimized_beats_constant_validation_mae', 'неизвестно')}.",
+                  f"- Auditor RM превосходит константу на validation: {sel.get('auditor_beats_constant_validation_mae', 'неизвестно')}.",
                   f"- Решение: `{sel['reason']}`. Здесь нет онлайн-оценки.", ""]
+    if data.get("strongest_non_rl_accuracy_baseline_on_validation"):
+        lines += [
+            "## Контроль против простых рекомендателей", "",
+            f"- Сильнейший non-RL ranking-контроль по validation: `{data['strongest_non_rl_accuracy_baseline_on_validation']}`.",
+            f"- Выбранная политика не хуже этого контроля по validation NDCG: "
+            f"{data.get('selected_model_competitive_with_strongest_baseline_on_validation')}.",
+            "Это отдельная проверка качества: при сильном non-RL baseline рост "
+            "модельной награды относительно GPT-2 ещё не означает практического "
+            "улучшения рекомендаций.", "",
+        ]
     for split in ("validation", "test"):
         frontier = data.get(f"{split}_pareto_frontier", [])
         if split == "test":
