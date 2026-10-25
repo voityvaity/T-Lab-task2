@@ -484,6 +484,10 @@ def run(args) -> dict:
                   "context", "hidden", "layers", "heads", "train_events", "eval_per_user"):
         if getattr(args, field) < 1:
             raise ValueError(f"{field} must be strictly positive")
+    if not 0 <= args.dense_weight <= 1:
+        raise ValueError("dense_weight must be in [0,1]")
+    if args.reward_prior_smoothing <= 0 or args.sft_patience < 1 or args.reward_patience < 1:
+        raise ValueError("Reward prior smoothing and patience must be strictly positive")
     if args.batch < 2:
         raise ValueError("REINFORCE requires batch >= 2 for nonzero leave-one-out advantages")
     if args.hidden % args.heads:
@@ -519,7 +523,9 @@ def run(args) -> dict:
     base = make_gpt2(len(data.train_counts), args.context, args.hidden,
                      args.layers, args.heads).to(device)
     logs = {"base": train_base(base, data.train, args.base_steps, args.batch, device,
-                               args.base_lr, args.seed, validation=data.valid)}
+                               args.base_lr, args.seed, validation=data.valid,
+                               dense_weight=args.dense_weight,
+                               patience=args.sft_patience)}
     torch.save(base.state_dict(), out / "gpt2_base.pt")
     # Train the optimized reward and independent diagnostic head on DISJOINT TRAIN users.
     users = np.unique(data.train.user)
@@ -533,26 +539,62 @@ def run(args) -> dict:
     auditor_train = subset(data.train, auditor_mask)
     if len(optim_train) == 0 or len(auditor_train) == 0:
         raise ValueError("No observed rewards in an independent reward model partition")
-    reward = RewardModel(base, args.hidden).to(device)
+    # Empirical Bayes priors are fitted independently in each reward-user
+    # partition. An item with zero positive evidence shrinks to global TRAIN
+    # completion rather than the arbitrary 0.5 produced by an untrained MLP.
+    optimized_prior = estimate_completion_prior(optim_train, len(data.train_counts),
+                                                 smoothing=args.reward_prior_smoothing)
+    auditor_prior = estimate_completion_prior(auditor_train, len(data.train_counts),
+                                               smoothing=args.reward_prior_smoothing)
+
+    def reward_head(prior):
+        return RewardModel(base, args.hidden,
+                           item_prior=prior.item_mean,
+                           item_count=prior.item_count,
+                           item_duration=data.train_duration).to(device)
+
+    def persist_reward_head(model, filename, partition):
+        # Saving only the MLP is insufficient now that inference uses a
+        # train-only item prior. Keep all reward features with the head.
+        torch.save({
+            "head_state": model.head.state_dict(),
+            "item_prior": model.item_prior.cpu(),
+            "item_count": model.item_count.cpu(),
+            "item_duration": model.item_duration.cpu(),
+            "encoder_checkpoint": "gpt2_base.pt",
+            "train_partition": partition,
+            "prior_smoothing": args.reward_prior_smoothing,
+        }, out / filename)
+
+    reward = reward_head(optimized_prior)
     logs["reward"] = train_reward(reward, optim_train, args.reward_steps, args.batch,
-                                  device, args.reward_lr, args.seed + 1)
-    torch.save(reward.head.state_dict(), out / "reward_head.pt")
-    # Second reward head with separate initialization and sample order. Both
-    # heads see only the reward-training users; the audit head below remains
-    # reserved for diagnostic comparison, and is not used to optimize RL.
-    uncertainty = RewardModel(base, args.hidden).to(device)
+                                  device, args.reward_lr, args.seed + 1,
+                                  validation=data.valid, patience=args.reward_patience)
+    persist_reward_head(reward, "reward_head.pt", "optimized_users_only")
+    # Second head uses the SAME eligible train users and prior but an
+    # independently initialized neural residual; diagnostic auditor below
+    # uses DISJOINT TRAIN users, and cannot influence RL gradients.
+    uncertainty = reward_head(optimized_prior)
     logs["uncertainty"] = train_reward(uncertainty, optim_train, args.reward_steps,
-                                      args.batch, device, args.reward_lr, args.seed + 29)
-    torch.save(uncertainty.head.state_dict(), out / "uncertainty_head.pt")
-    audit = RewardModel(base, args.hidden).to(device)
+                                      args.batch, device, args.reward_lr, args.seed + 29,
+                                      validation=data.valid, patience=args.reward_patience)
+    persist_reward_head(uncertainty, "uncertainty_head.pt", "optimized_users_only")
+    audit = reward_head(auditor_prior)
     logs["auditor"] = train_reward(audit, auditor_train, args.reward_steps, args.batch,
-                                   device, args.reward_lr, args.seed + 2)
-    torch.save(audit.head.state_dict(), out / "auditor_head.pt")
+                                   device, args.reward_lr, args.seed + 2,
+                                   validation=data.valid, patience=args.reward_patience)
+    persist_reward_head(audit, "auditor_head.pt", "auditor_users_only")
+    def quality(model, split, own_prior):
+        return reward_quality(model, split, own_prior.global_mean,
+                              args.batch, device, train_counts=counts,
+                              prior_median=own_prior.global_median)
+
     reward_metrics = {
-        "optimized_valid": reward_quality(reward, data.valid, float(optim_train.completion.mean()), args.batch, device, train_counts=counts),
-        "auditor_valid": reward_quality(audit, data.valid, float(auditor_train.completion.mean()), args.batch, device, train_counts=counts),
-        "uncertainty_valid": reward_quality(uncertainty, data.valid, float(optim_train.completion.mean()), args.batch, device, train_counts=counts),
+        "optimized_valid": quality(reward, data.valid, optimized_prior),
+        "auditor_valid": quality(audit, data.valid, auditor_prior),
+        "uncertainty_valid": quality(uncertainty, data.valid, optimized_prior),
         "auditor_train_user_disjoint": True,
+        "prior_smoothing": args.reward_prior_smoothing,
     }
     base_valid, _ = evaluate(base, data.valid, reward, audit, counts, durations, device, args.batch)
     candidates = {"gpt2": (base, None, None)}
@@ -642,9 +684,9 @@ def run(args) -> dict:
     non_rl = ("gpt2", "popularity", "sequential_rules", "smoothed_transition")
     strongest_accuracy_control = max(non_rl, key=lambda name: validation[name]["ndcg_at_10"])
     # All test evaluation happens after validation-only model selection.
-    reward_metrics["optimized_test"] = reward_quality(reward, data.test, float(optim_train.completion.mean()), args.batch, device, train_counts=counts)
-    reward_metrics["auditor_test"] = reward_quality(audit, data.test, float(auditor_train.completion.mean()), args.batch, device, train_counts=counts)
-    reward_metrics["uncertainty_test"] = reward_quality(uncertainty, data.test, float(optim_train.completion.mean()), args.batch, device, train_counts=counts)
+    reward_metrics["optimized_test"] = quality(reward, data.test, optimized_prior)
+    reward_metrics["auditor_test"] = quality(audit, data.test, auditor_prior)
+    reward_metrics["uncertainty_test"] = quality(uncertainty, data.test, optimized_prior)
     test_results = {}
     test_ndcg = {}
     for name, (policy, alpha, kind) in candidates.items():
@@ -719,6 +761,14 @@ def main() -> None:
     p.add_argument("--heads", type=int, default=4)
     p.add_argument("--batch", type=int, default=32)
     p.add_argument("--base-steps", type=int, default=500)
+    p.add_argument("--dense-weight", type=float, default=0.6,
+                   help="Weight of dense causal next-item loss vs final next-item loss")
+    p.add_argument("--sft-patience", type=int, default=4,
+                   help="Validation checks without improvement before SFT early stop")
+    p.add_argument("--reward-patience", type=int, default=5,
+                   help="Observed validation-MSE checks before reward early stop")
+    p.add_argument("--reward-prior-smoothing", type=float, default=40.0,
+                   help="Train-only pseudo-count for smoothed item completion priors")
     p.add_argument("--reward-steps", type=int, default=200)
     p.add_argument("--rl-steps", type=int, default=100)
     p.add_argument("--base-lr", type=float, default=0.0005)
