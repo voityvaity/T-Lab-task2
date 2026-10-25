@@ -669,12 +669,12 @@ def run(args) -> dict:
         max_absolute_ndcg_drop=args.max_absolute_ndcg_drop,
         min_auditor_gain=args.min_auditor_gain,
         auditor_is_useful=(
-            reward_metrics["auditor_valid"]["mae"]
-            < reward_metrics["auditor_valid"]["constant_mean_mae"]
+            reward_metrics["auditor_valid"]["rmse"]
+            < reward_metrics["auditor_valid"]["constant_mean_rmse"]
         ),
         optimized_is_useful=(
-            reward_metrics["optimized_valid"]["mae"]
-            < reward_metrics["optimized_valid"]["constant_mean_mae"]
+            reward_metrics["optimized_valid"]["rmse"]
+            < reward_metrics["optimized_valid"]["constant_mean_rmse"]
         ),
     )
     selected = selection["selected"]
