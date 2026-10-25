@@ -30,7 +30,7 @@ jobs:
             --users 8 --vocab 64 --context 12 --train-events 300 \
             --hidden 32 --layers 1 --heads 4 --batch 4 \
             --base-steps 3 --reward-steps 3 --rl-steps 2 \
-            --rewards completion,balanced --betas 0.02 --rerank-alphas 0,1 \
+            --rewards completion,balanced --betas 0.02 --rl-horizons 1,5 --rerank-alphas 0,1 \
             --eval-per-user 2 --cpu
       - name: Build measured offline Markdown report
         if: success()
