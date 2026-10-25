@@ -15,7 +15,7 @@ def validate_smoke_results(path: Path) -> dict:
     if data.get("source_kind") != "synthetic" or data.get("status") != "synthetic_smoke_only":
         raise AssertionError("Smoke run must be prominently labeled synthetic")
     actual = data.get("test", {})
-    required = {"gpt2", "rerank_0.0", "popularity", "sequential_rules"}
+    required = {"gpt2", "rerank_0.0", "popularity", "sequential_rules", "smoothed_transition"}
     if not required.issubset(actual):
         raise AssertionError(f"Missing ranking controls: {required - set(actual)}")
     rl = [name for name in actual if name.startswith("rl_")]
