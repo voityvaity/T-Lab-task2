@@ -55,6 +55,7 @@ class DataBundle:
     coverage: dict[str, float]
     boundaries: dict[str, int]
     config: DataConfig
+    session_proxy: dict[str, dict]
 
 
 def _scan_stats(path: Path) -> tuple[int, int, Counter]:
@@ -134,6 +135,50 @@ def _to_examples(rows: list, length: int) -> Examples:
                     np.asarray(tim, dtype=np.int64))
 
 
+def summarize_session_returns(
+    events: pd.DataFrame, test_start: int, source_last: int,
+    session_gap_bins: int = 360, return_horizon_bins: int = 17_280
+) -> dict[str, dict]:
+    """Descriptive 30-minute session-end -> 24-hour return association.
+
+    Yambda timestamps are five-second bins. Only fully observable 24h
+    windows in the TEST period enter these statistics. A later replay is
+    not necessarily caused by any particular earlier recommended track.
+    No session targets are passed into policy or reward fitting.
+    """
+    if not (0 < session_gap_bins < return_horizon_bins):
+        raise ValueError("Invalid session gap/horizon")
+    stats = {key: {"n_session_ends": 0, "returned_within_24h": 0}
+             for key in ("low_completion", "medium_completion", "high_completion")}
+    for _, group in events.groupby("uid", sort=False):
+        ts = group["timestamp"].to_numpy(dtype=np.int64)
+        if len(ts) == 0:
+            continue
+        delta = np.empty(len(ts), dtype=np.int64)
+        delta[:-1] = np.diff(ts)
+        delta[-1] = np.iinfo(np.int64).max
+        ratios = np.clip(
+            group["played_ratio_pct"].to_numpy(dtype=np.float32), 0, 100
+        )
+        complete_horizon = (ts >= test_start) & (ts <= source_last - return_horizon_bins)
+        ends = complete_horizon & (delta > session_gap_bins)
+        for key, selector in (
+            ("low_completion", ratios < 50),
+            ("medium_completion", (ratios >= 50) & (ratios < 90)),
+            ("high_completion", ratios >= 90),
+        ):
+            chosen = ends & selector
+            n = int(chosen.sum())
+            stats[key]["n_session_ends"] += n
+            stats[key]["returned_within_24h"] += int(
+                (delta[chosen] <= return_horizon_bins).sum()
+            )
+    for row in stats.values():
+        n = row["n_session_ends"]
+        row["return_rate"] = row["returned_within_24h"] / n if n else None
+    return stats
+
+
 def prepare(path: str | Path, cfg: DataConfig) -> DataBundle:
     """Read real events, split globally by time and sample only past-aware examples."""
     path = Path(path)
@@ -210,12 +255,14 @@ def prepare(path: str | Path, cfg: DataConfig) -> DataBundle:
         test_rows.extend(user_test)
     if not train_rows or not valid_rows or not test_rows:
         raise ValueError("At least one train/validation/test example required; adjust subcatalog/sample")
+    sessions = summarize_session_returns(df, t_valid, last)
     coverage = {name: eligible[name] / max(1, total[name]) for name in ("valid", "test")}
     coverage.update({name + "_eligible": eligible[name] for name in ("valid", "test")})
     coverage.update({name + "_total": total[name] for name in ("valid", "test")})
     return DataBundle(_to_examples(train_rows, cfg.context_length), _to_examples(valid_rows, cfg.context_length),
                       _to_examples(test_rows, cfg.context_length), token_to_item, item_counts, item_seconds,
-                      coverage, {"first": first, "last": last, "train_end": t_train, "valid_end": t_valid}, cfg)
+                      coverage, {"first": first, "last": last, "train_end": t_train, "valid_end": t_valid}, cfg,
+                      sessions)
 
 
 def save_metadata(bundle: DataBundle, output: str | Path) -> None:
@@ -224,5 +271,6 @@ def save_metadata(bundle: DataBundle, output: str | Path) -> None:
     info = {"data_config": asdict(bundle.config), "boundaries": bundle.boundaries,
             "coverage": bundle.coverage, "train_size": len(bundle.train),
             "valid_size": len(bundle.valid), "test_size": len(bundle.test),
-            "mapped_items": len(bundle.token_to_item)}
+            "mapped_items": len(bundle.token_to_item),
+            "observed_session_return_proxy_test_only": bundle.session_proxy}
     (root / "dataset_protocol.json").write_text(json.dumps(info, indent=2, ensure_ascii=False), encoding="utf-8")
