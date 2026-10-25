@@ -43,8 +43,20 @@ def validate_smoke_results(path: Path) -> dict:
     base_drift = data.get("real_context_vs_generated_context_drift", {}).get("gpt2", [])
     if len(base_drift) != 5 or not all(step["paired_trajectories"] > 0 for step in base_drift):
         raise AssertionError("Five-step drift evaluation silently skipped or empty")
-    if data.get("selection_diagnostics", {}).get("selected") != data.get("selected_on_validation"):
+    decision = data.get("selection_diagnostics", {})
+    if decision.get("selected") != data.get("selected_on_validation"):
         raise AssertionError("Selection report disagrees with selected checkpoint")
+    qualities = data.get("reward_quality_on_observed_events", {})
+    if "optimized_valid" in qualities and "auditor_valid" in qualities:
+        for model in ("optimized_valid", "auditor_valid"):
+            row = qualities[model]
+            if row["mae"] >= row["constant_mean_mae"] and data["selected_on_validation"] != "gpt2":
+                raise AssertionError(f"Selected RL despite useless observed-feedback model: {model}")
+    if data["selected_on_validation"] != "gpt2":
+        baseline = data["validation"]["gpt2"]["auditor_completion_at_10"]
+        winner = data["validation"][data["selected_on_validation"]]["auditor_completion_at_10"]
+        if winner <= baseline + decision["min_auditor_gain"]:
+            raise AssertionError("Selected RL on sub-threshold auditor reward gain")
     return {"models_evaluated": len(actual), "rl_policies": len(rl),
             "real_five_step_windows": trajectories}
 
