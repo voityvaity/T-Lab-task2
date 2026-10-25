@@ -375,6 +375,25 @@ def subset(data: Examples, mask: np.ndarray) -> Examples:
 def run(args) -> dict:
     if args.source_kind == "yambda" and Path(args.data).suffix.lower() != ".parquet":
         raise ValueError("A real Yambda run must read the version-pinned Parquet file, not a CSV smoke fixture")
+    for field in ("base_steps", "reward_steps", "rl_steps", "users", "vocab",
+                  "context", "hidden", "layers", "heads", "train_events", "eval_per_user"):
+        if getattr(args, field) < 1:
+            raise ValueError(f"{field} must be strictly positive")
+    if args.batch < 2:
+        raise ValueError("REINFORCE requires batch >= 2 for nonzero leave-one-out advantages")
+    if args.hidden % args.heads:
+        raise ValueError("GPT-2 hidden width must be divisible by attention heads")
+    if not 0 < args.train_fraction < 1 or not 0 < args.valid_fraction < 1 - args.train_fraction:
+        raise ValueError("Invalid globally time-ordered train/validation fractions")
+    for val in args.betas.split(","):
+        if float(val) < 0:
+            raise ValueError("KL penalties must be nonnegative")
+    for val in args.rl_horizons.split(","):
+        if int(val) not in (1, 5):
+            raise ValueError("Implemented comparison permits only one or five RL rollout steps")
+    for value in args.rewards.split(","):
+        if value not in ("completion", "watch_time", "balanced", "conservative"):
+            raise ValueError(f"Unknown reward objective: {value}")
     seed_all(args.seed)
     torch.set_num_threads(min(4, max(1, torch.get_num_threads())))
     device = torch.device("cuda" if torch.cuda.is_available() and not args.cpu else "cpu")
