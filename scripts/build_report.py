@@ -172,7 +172,7 @@ def main() -> None:
     a = parser.parse_args()
     a.output.parent.mkdir(parents=True, exist_ok=True)
     a.output.write_text(report(a.input), encoding="utf-8")
-    print(f"Generated measured offline report: {a.output}")
+    print(f"Generated source-labeled report (see SYNTHETIC/Yambda banner): {a.output}")
 
 
 if __name__ == "__main__":
