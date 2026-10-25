@@ -301,7 +301,28 @@ def prepare(path: str | Path, cfg: DataConfig) -> DataBundle:
 def save_metadata(bundle: DataBundle, output: str | Path) -> None:
     root = Path(output)
     root.mkdir(parents=True, exist_ok=True)
+    if bundle.train.context_timestamps is None:
+        raise ValueError("A real dataset manifest requires causal context timestamps")
+    ctx = bundle.train.context
+    times = bundle.train.context_timestamps
+    following_items = np.concatenate((ctx[:, 1:], bundle.train.target[:, None]), axis=1)
+    following_times = np.concatenate((times[:, 1:], bundle.train.timestamp[:, None]), axis=1)
+    potential = (ctx != 0) & (following_items >= 2)
+    tied = potential & (following_times == times)
+    valid = potential & (following_times > times)
+    if (potential & (following_times < times)).any():
+        raise ValueError("Detected reverse-ordered history timestamp in train data")
+    dense_diagnostics = {
+        "potential_known_item_transitions": int(potential.sum()),
+        "same_timestamp_unordered_transitions": int(tied.sum()),
+        "strictly_later_causal_transitions": int(valid.sum()),
+        "same_timestamp_transition_fraction": (
+            float(tied.sum() / potential.sum()) if potential.any() else None
+        ),
+        "method": "strictly later timestamp; ties excluded from dense cross-entropy",
+    }
     info = {"data_config": asdict(bundle.config), "boundaries": bundle.boundaries,
+            "dense_training_timestamp_audit": dense_diagnostics,
             "coverage": bundle.coverage, "train_size": len(bundle.train),
             "valid_size": len(bundle.valid), "test_size": len(bundle.test),
             "mapped_items": len(bundle.token_to_item),
