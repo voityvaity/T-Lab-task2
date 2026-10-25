@@ -65,3 +65,17 @@ def test_experiment_refuses_synthetic_csv_disguised_as_yambda():
     from tlab2.experiment import run
     with pytest.raises(ValueError, match="version-pinned Parquet"):
         run(Namespace(data="data/synthetic_listens.csv", source_kind="yambda"))
+
+
+def test_one_example_reinforce_batch_fails_instead_of_silent_zero_gradient():
+    from argparse import Namespace
+    from tlab2.experiment import run
+    args = Namespace(
+        source_kind="synthetic", data="data/not_needed.csv",
+        base_steps=1, reward_steps=1, rl_steps=1, users=2, vocab=16,
+        context=8, hidden=32, layers=1, heads=4, train_events=10,
+        eval_per_user=5, batch=1, train_fraction=.7, valid_fraction=.15,
+        betas=".1", rl_horizons="1", rewards="completion", seed=42,
+    )
+    with pytest.raises(ValueError, match="batch >= 2"):
+        run(args)
