@@ -102,8 +102,12 @@ def reward_quality(model: RewardModel, sample: Examples, prior_mean: float,
     predictions = []
     labels = []
     for x, y, label in batches(sample, batch_size, device, seed=0, shuffle=False):
-        predictions.extend(model(x, y).cpu().tolist())
-        labels.extend(label.cpu().tolist())
+        eligible = y >= 2
+        if eligible.any():
+            predictions.extend(model(x[eligible], y[eligible]).cpu().tolist())
+            labels.extend(label[eligible].cpu().tolist())
+    if not labels:
+        raise ValueError("No in-catalog observed items available for reward-model evaluation")
     pred = np.asarray(predictions)
     actual = np.asarray(labels)
     return {"mae": float(np.abs(pred - actual).mean()),
@@ -165,9 +169,18 @@ def evaluate(policy, sample: Examples, reward: RewardModel, audit: RewardModel,
         rm_audit.extend(second.mean(dim=1).cpu().tolist())
         disagreement.extend((predicted - second).abs().mean(dim=1).cpu().tolist())
     all_rec = np.asarray(recommended, dtype=np.int64)
+    in_catalog = sample.target >= 2
     return ({
         "queries": len(scores), "recall_at_10": float(np.mean(hits)),
         "ndcg_at_10": float(np.mean(scores)),
+        "in_vocab_targets": int(np.sum(in_catalog)),
+        "target_catalog_coverage": float(np.mean(in_catalog)),
+        "conditional_recall_at_10": (
+            float(np.mean(np.asarray(hits)[in_catalog])) if in_catalog.any() else None
+        ),
+        "conditional_ndcg_at_10": (
+            float(np.mean(np.asarray(scores)[in_catalog])) if in_catalog.any() else None
+        ),
         "predicted_completion_at_10": float(np.mean(rm_pred)),
         "predicted_capped_listen_seconds_at_10": float(np.mean(expected_listened_seconds)),
         "auditor_completion_at_10": float(np.mean(rm_audit)),
@@ -447,7 +460,7 @@ def run(args) -> dict:
                         "Main/uncertainty heads share training users but vary initialization; auditor trained on held-out train users with shared frozen encoder",
                         "Generated items inserted hypothetically, without feedback simulation",
                         "Session-return associations are observational and do not identify policy-caused retention",
-                        "All absolute metrics conditional on targets inside train vocabulary"]
+                        "Main Recall/NDCG count out-of-vocabulary future tracks as misses; conditional metrics are secondary"]
     }
     (out / "experiment.json").write_text(json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8")
     (out / "training_logs.json").write_text(json.dumps(logs, indent=2, ensure_ascii=False), encoding="utf-8")
