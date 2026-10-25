@@ -94,33 +94,43 @@ def test_same_timestamp_does_not_look_ahead(tmp_path: Path) -> None:
     assert np.array_equal(all_data.train.context[indexes[0]], all_data.train.context[indexes[1]])
 
 
-def test_session_return_proxy_respects_24h_censoring() -> None:
-    # Five-second time units. User 1 ends three listening sessions:
-    # low completion -> return in 1h; high completion -> no return in 24h;
-    # final event -> censored (no full observation horizon).
+def test_session_return_proxy_respects_real_seconds_and_right_censoring() -> None:
+    # Yambda timestamps are seconds snapped to a 5-second resolution,
+    # NOT counters of five-second units. 30min = 1800, 24h = 86400.
     events = pd.DataFrame([
         {"uid": 1, "timestamp": 100, "played_ratio_pct": 30},
-        {"uid": 1, "timestamp": 820, "played_ratio_pct": 95},
-        {"uid": 1, "timestamp": 30_000, "played_ratio_pct": 50},
+        {"uid": 1, "timestamp": 2500, "played_ratio_pct": 95},
+        {"uid": 1, "timestamp": 110_000, "played_ratio_pct": 50},
         {"uid": 2, "timestamp": 250, "played_ratio_pct": 55},
-        {"uid": 2, "timestamp": 550, "played_ratio_pct": 70},  # same session; not an end
+        {"uid": 2, "timestamp": 550, "played_ratio_pct": 70},  # same session
     ])
-    summary = summarize_session_returns(events, test_start=0, source_last=40_000)
+    summary = summarize_session_returns(events, test_start=0, source_last=140_000)
     assert summary["low_completion"]["n_session_ends"] == 1
-    assert summary["low_completion"]["returned_within_24h"] == 1
+    assert summary["low_completion"]["returned_within_24h"] == 1  # 2400 sec later
     assert summary["high_completion"]["n_session_ends"] == 1
-    assert summary["high_completion"]["returned_within_24h"] == 0
-    # User 1's last medium-completion event (ts=30000) is right-censored,
-    # but user 2's last medium event (ts=550) has a complete global horizon
-    # and correctly counts as a non-return. Both scenarios must be tested.
+    assert summary["high_completion"]["returned_within_24h"] == 0  # > 86400 sec
+    # Last user-1 event ts=110000 is right-censored; user-2 last event
+    # ts=550 has complete 24h global follow-up and counts as non-return.
     assert summary["medium_completion"]["n_session_ends"] == 1
     assert summary["medium_completion"]["returned_within_24h"] == 0
     only_user_1 = summarize_session_returns(events[events.uid == 1],
-                                            test_start=0, source_last=40_000)
+                                            test_start=0, source_last=140_000)
     assert only_user_1["medium_completion"]["n_session_ends"] == 0
     assert only_user_1["medium_completion"]["return_rate"] is None
-    assert summary["high_completion"]["return_rate"] == 0.0
 
+
+def test_session_return_gap_must_exceed_1800_actual_seconds() -> None:
+    # Between two listens there are 900 actual seconds = 15 minutes.
+    # Incorrect legacy code would have classified this as a 30min gap.
+    events = pd.DataFrame([
+        {"uid": 1, "timestamp": 100, "played_ratio_pct": 40},
+        {"uid": 1, "timestamp": 1000, "played_ratio_pct": 75},
+        {"uid": 1, "timestamp": 4000, "played_ratio_pct": 95},
+    ])
+    stats = summarize_session_returns(events, test_start=0, source_last=200000)
+    assert stats["low_completion"]["n_session_ends"] == 0
+    assert stats["medium_completion"]["n_session_ends"] == 1
+    assert stats["medium_completion"]["returned_within_24h"] == 1
 
 def test_unused_nominal_vocab_slots_are_never_recommendable(tmp_path: Path) -> None:
     path = tmp_path / "events.csv"
