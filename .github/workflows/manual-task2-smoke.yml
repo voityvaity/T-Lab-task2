@@ -1,0 +1,41 @@
+name: Manual Task 2 smoke (CPU synthetic only)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[train,dev]"
+      - name: Regression tests
+        run: pytest -q
+      - name: Generate synthetic fixture
+        run: python scripts/make_synthetic.py --users 8 --events 90
+      - name: Synthetic end-to-end training
+        run: |
+          python -m tlab2.experiment \
+            --data data/synthetic_listens.csv --output outputs/smoke \
+            --users 8 --vocab 64 --context 12 --train-events 300 \
+            --hidden 32 --layers 1 --heads 4 --batch 4 \
+            --base-steps 3 --reward-steps 3 --rl-steps 2 \
+            --rewards completion,balanced --betas 0.02 --rerank-alphas 0,1 \
+            --eval-per-user 2 --cpu
+      - name: Upload smoke results (NOT REAL Yambda measurements)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: task2-synthetic-smoke
+          path: outputs/smoke
+          retention-days: 7
