@@ -1,0 +1,49 @@
+name: Manual Yambda 24h session recount (no model training)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  recount:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install data-only dependencies and test
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[download,dev]"
+          python -m compileall -q src tests scripts
+          pytest -q tests/test_data.py tests/test_session_recount.py
+      - name: Download same pinned Yambda-50M Parquet as improved run
+        run: |
+          hf download yandex/yambda flat/50m/listens.parquet \
+            --repo-type dataset \
+            --revision e8b04458db77e2fb30a24e65f78923fa48b7d297 \
+            --local-dir data
+      - name: Recalculate corrected full-24h outcomes from exact original train cohort
+        run: |
+          python scripts/recompute_session_proxy.py \
+            --data data/flat/50m/listens.parquet \
+            --output outputs/session_recount.json \
+            --users 256 --seed 42 --train-fraction 0.70 --valid-fraction 0.15 \
+            --expected-dataset-hash eed9cbd094af1e189507d2f8132a0dc9653b90e65480125c7cdccd601e0592d1 \
+            --expected-cohort-hash 85433bb7b6b79f8bb3d1d80d0ad0715a03c0d9e4961af713eb61f966039dc325
+      - name: Write run provenance
+        if: success()
+        run: |
+          git rev-parse HEAD > outputs/source-git-sha.txt
+          python -m pip freeze > outputs/requirements-frozen.txt
+      - name: Upload corrected return associations (observational, not retention effect)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: task2-yambda-corrected-24h-session-recount
+          path: outputs/
+          retention-days: 14
