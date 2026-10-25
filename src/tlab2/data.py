@@ -140,16 +140,16 @@ def _to_examples(rows: list, length: int) -> Examples:
 
 def summarize_session_returns(
     events: pd.DataFrame, test_start: int, source_last: int,
-    session_gap_bins: int = 360, return_horizon_bins: int = 17_280
+    session_gap_seconds: int = 1_800, return_horizon_seconds: int = 86_400
 ) -> dict[str, dict]:
     """Descriptive 30-minute session-end -> 24-hour return association.
 
-    Yambda timestamps are five-second bins. Only fully observable 24h
-    windows in the TEST period enter these statistics. A later replay is
-    not necessarily caused by any particular earlier recommended track.
-    No session targets are passed into policy or reward fitting.
+    Yambda timestamps are SECONDS QUANTIZED to five-second resolution,
+    not counts of five-second ticks. Only fully observable 24h windows
+    in TEST enter these statistics. A return is not necessarily caused by
+    any earlier recommendation. No session targets enter model fitting.
     """
-    if not (0 < session_gap_bins < return_horizon_bins):
+    if not (0 < session_gap_seconds < return_horizon_seconds):
         raise ValueError("Invalid session gap/horizon")
     stats = {key: {"n_session_ends": 0, "returned_within_24h": 0}
              for key in ("low_completion", "medium_completion", "high_completion")}
@@ -163,8 +163,8 @@ def summarize_session_returns(
         ratios = np.clip(
             group["played_ratio_pct"].to_numpy(dtype=np.float32), 0, 100
         )
-        complete_horizon = (ts >= test_start) & (ts <= source_last - return_horizon_bins)
-        ends = complete_horizon & (delta > session_gap_bins)
+        complete_horizon = (ts >= test_start) & (ts <= source_last - return_horizon_seconds)
+        ends = complete_horizon & (delta > session_gap_seconds)
         for key, selector in (
             ("low_completion", ratios < 50),
             ("medium_completion", (ratios >= 50) & (ratios < 90)),
@@ -174,7 +174,7 @@ def summarize_session_returns(
             n = int(chosen.sum())
             stats[key]["n_session_ends"] += n
             stats[key]["returned_within_24h"] += int(
-                (delta[chosen] <= return_horizon_bins).sum()
+                (delta[chosen] <= return_horizon_seconds).sum()
             )
     for row in stats.values():
         n = row["n_session_ends"]
