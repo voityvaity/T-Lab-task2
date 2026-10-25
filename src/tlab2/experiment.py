@@ -422,7 +422,9 @@ def run(args) -> dict:
              for name, (policy, alpha, kind) in candidates.items()
              if name == "gpt2" or name == selected}
     results = {
-        "status": "measured_offline_model_based_not_causal",
+        "status": ("synthetic_smoke_only" if args.source_kind == "synthetic"
+                   else "measured_offline_model_based_not_causal"),
+        "source_kind": args.source_kind,
         "selected_on_validation": selected,
         "selection_rule": f"max auditor completion subject to validation NDCG >= GPT2-{args.allowed_ndcg_drop}",
         "device": str(device),
@@ -450,6 +452,8 @@ def run(args) -> dict:
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--data", required=True, help="Yambda flat/50m/listens.parquet or synthetic CSV")
+    p.add_argument("--source-kind", choices=("synthetic", "yambda"), required=True,
+                   help="Mandatory provenance label: never report smoke results as real Yambda")
     p.add_argument("--output", default="outputs/task2")
     p.add_argument("--users", type=int, default=128)
     p.add_argument("--vocab", type=int, default=4096)
