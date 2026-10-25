@@ -5,6 +5,7 @@ Results are exploratory offline proxies, not observed counterfactual outcomes.
 from __future__ import annotations
 
 import argparse
+from copy import deepcopy
 from dataclasses import asdict
 import json
 import math
@@ -45,12 +46,44 @@ def batches(data: Examples, batch_size: int, device: torch.device,
                torch.as_tensor(data.completion[ids], dtype=torch.float32, device=device))
 
 
-def train_base(policy, train: Examples, steps: int, batch_size: int, device, learning_rate: float,
-               seed: int) -> list[dict]:
+@torch.no_grad()
+def supervised_validation_loss(policy, data: Examples, batch_size: int,
+                               device: torch.device) -> float:
+    """Next-item CE on genuinely observed, in-catalog VALIDATION targets only.
+
+    An OOV target cannot be a valid GPT-2 output; evaluation Recall/NDCG
+    *does* count it as a miss, but supervised CE has no such target class.
+    """
+    policy.eval()
+    valid_ids = np.flatnonzero(data.target >= 2)
+    if len(valid_ids) == 0:
+        return math.inf
+    total_loss = 0.0
+    total = 0
+    for offset in range(0, len(valid_ids), batch_size):
+        ids = valid_ids[offset:offset + batch_size]
+        x = torch.as_tensor(data.context[ids], dtype=torch.long, device=device)
+        target = torch.as_tensor(data.target[ids], dtype=torch.long, device=device)
+        loss = F.cross_entropy(mask_special(policy_logits(policy, x)), target,
+                               reduction="sum")
+        total_loss += float(loss.item())
+        total += len(ids)
+    return total_loss / total
+
+
+def train_base(policy, train: Examples, steps: int, batch_size: int, device,
+               learning_rate: float, seed: int,
+               validation: Examples | None = None) -> list[dict]:
+    """Fit GPT-2 and restore best checkpoint by train-excluded validation CE."""
+    if steps < 1:
+        raise ValueError("base_steps must be >= 1")
     policy.train()
     opt = torch.optim.AdamW(policy.parameters(), lr=learning_rate, weight_decay=0.01)
     logs = []
     iteration = 0
+    best_loss = math.inf
+    best_state = None
+    eval_interval = max(1, steps // 8)
     while iteration < steps:
         for x, y, _ in batches(train, batch_size, device, seed + iteration):
             opt.zero_grad(set_to_none=True)
@@ -59,10 +92,26 @@ def train_base(policy, train: Examples, steps: int, batch_size: int, device, lea
             torch.nn.utils.clip_grad_norm_(policy.parameters(), 1.0)
             opt.step()
             iteration += 1
-            if iteration % max(1, steps // 10) == 0 or iteration == 1:
-                logs.append({"step": iteration, "cross_entropy": float(loss.item())})
+            if iteration == 1 or iteration % eval_interval == 0 or iteration == steps:
+                row = {"step": iteration, "cross_entropy": float(loss.item())}
+                if validation is not None:
+                    val_loss = supervised_validation_loss(policy, validation, batch_size, device)
+                    row["validation_cross_entropy_in_vocab"] = (
+                        val_loss if math.isfinite(val_loss) else None
+                    )
+                    if val_loss < best_loss:
+                        best_loss = val_loss
+                        best_state = deepcopy(policy.state_dict())
+                logs.append(row)
             if iteration >= steps:
                 break
+            policy.train()
+    if best_state is not None:
+        policy.load_state_dict(best_state)
+        logs.append({"selected_validation_cross_entropy": best_loss,
+                     "checkpoint_selection": "minimum_in_vocab_validation_ce"})
+    elif validation is not None:
+        logs.append({"checkpoint_selection": "last_step_no_in_vocab_validation_targets"})
     policy.eval()
     return logs
 
@@ -342,7 +391,7 @@ def run(args) -> dict:
     base = make_gpt2(len(data.train_counts), args.context, args.hidden,
                      args.layers, args.heads).to(device)
     logs = {"base": train_base(base, data.train, args.base_steps, args.batch, device,
-                               args.base_lr, args.seed)}
+                               args.base_lr, args.seed, validation=data.valid)}
     torch.save(base.state_dict(), out / "gpt2_base.pt")
     # Train the optimized reward and independent diagnostic head on DISJOINT TRAIN users.
     users = np.unique(data.train.user)
