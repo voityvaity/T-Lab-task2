@@ -378,7 +378,9 @@ def run(args) -> dict:
     device = torch.device("cuda" if torch.cuda.is_available() and not args.cpu else "cpu")
     cfg = DataConfig(users=args.users, vocab_size=args.vocab, context_length=args.context,
                      train_events=args.train_events, seed=args.seed,
-                     eval_events_per_user=args.eval_per_user)
+                     eval_events_per_user=args.eval_per_user,
+                     train_fraction=args.train_fraction,
+                     valid_fraction=args.valid_fraction)
     data = prepare(args.data, cfg)
     out = Path(args.output)
     out.mkdir(parents=True, exist_ok=True)
@@ -574,6 +576,10 @@ def main() -> None:
     p.add_argument("--reward-lr", type=float, default=0.001)
     p.add_argument("--rl-lr", type=float, default=0.00003)
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--train-fraction", type=float, default=0.70,
+                   help="Fractional global temporal start-to-end range used for training")
+    p.add_argument("--valid-fraction", type=float, default=0.15,
+                   help="Following global temporal range reserved for validation")
     p.add_argument("--rewards", default="completion,watch_time,balanced,conservative")
     p.add_argument("--betas", default="0.02,0.2")
     p.add_argument("--rl-horizons", default="1,5", help="Compare myopic and hypothetical multi-step policy gradients")
