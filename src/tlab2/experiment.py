@@ -158,25 +158,79 @@ def train_base(policy, train: Examples, steps: int, batch_size: int, device,
     return logs
 
 
+@torch.no_grad()
+def reward_validation_mse(model: RewardModel, validation: Examples,
+                          batch_size: int, device) -> float:
+    """Score only observed in-catalog items, never unlabeled candidates."""
+    model.eval()
+    total = 0.0
+    n = 0
+    for x, y, label in batches(validation, batch_size, device, seed=0, shuffle=False):
+        keep = y >= 2
+        if keep.any():
+            pred = model(x[keep], y[keep])
+            total += float(F.mse_loss(pred, label[keep], reduction="sum").item())
+            n += int(keep.sum().item())
+    return total / n if n else math.inf
+
+
 def train_reward(model: RewardModel, sample: Examples, steps: int, batch_size: int,
-                 device, learning_rate: float, seed: int) -> list[dict]:
+                 device, learning_rate: float, seed: int,
+                 validation: Examples | None = None,
+                 patience: int = 5) -> list[dict]:
+    """Fit expected completion with proper squared loss and held-out checkpointing.
+
+    MAE is still reported, but MSE/RMSE is the proper objective when a model
+    is used as the expected-reward value in policy optimization.
+    """
+    if steps < 1 or patience < 1:
+        raise ValueError("reward training steps/patience must be positive")
     model.train()
-    opt = torch.optim.AdamW(model.head.parameters(), lr=learning_rate)
+    opt = torch.optim.AdamW(model.head.parameters(), lr=learning_rate,
+                            weight_decay=0.01)
     logs = []
     iteration = 0
-    while iteration < steps:
+    best_mse = math.inf
+    best_head = None
+    no_progress = 0
+    early_stop = False
+    eval_interval = max(1, steps // 12)
+    while iteration < steps and not early_stop:
         for x, y, label in batches(sample, batch_size, device, seed + iteration):
             opt.zero_grad(set_to_none=True)
             pred = model(x, y)
-            loss = F.smooth_l1_loss(pred, label)
+            loss = F.mse_loss(pred, label)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.head.parameters(), 1.0)
             opt.step()
             iteration += 1
-            if iteration % max(1, steps // 10) == 0 or iteration == 1:
-                logs.append({"step": iteration, "reward_huber": float(loss.item())})
-            if iteration >= steps:
+            if iteration == 1 or iteration % eval_interval == 0 or iteration == steps:
+                row = {"step": iteration, "train_mse": float(loss.item())}
+                if validation is not None:
+                    val_mse = reward_validation_mse(model, validation, batch_size, device)
+                    row["validation_mse_in_vocab_observed"] = (
+                        val_mse if math.isfinite(val_mse) else None
+                    )
+                    if val_mse < best_mse - 0.00001:
+                        best_mse = val_mse
+                        best_head = deepcopy(model.head.state_dict())
+                        no_progress = 0
+                    else:
+                        no_progress += 1
+                    if no_progress >= patience:
+                        early_stop = True
+                logs.append(row)
+            if iteration >= steps or early_stop:
                 break
+            model.train()
+    if best_head is not None:
+        model.head.load_state_dict(best_head)
+    logs.append({"checkpoint_selection": (
+                    "minimum_validation_mse" if best_head is not None
+                    else "last_step_no_valid_observed_labels"),
+                 "selected_validation_mse": best_mse if math.isfinite(best_mse) else None,
+                 "stopped_after_steps": iteration,
+                 "stopped_early": early_stop})
     model.eval()
     return logs
 
