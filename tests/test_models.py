@@ -6,7 +6,8 @@ pytest.importorskip("transformers")
 
 from tlab2.data import Examples
 from tlab2.experiment import bootstrap_delta, evaluate, reward_quality
-from tlab2.models import RewardModel, make_gpt2, reinforce_step, reinforce_rollout_step, shaped_reward, trainable_actor
+from tlab2.models import RewardModel, _history_mask_and_positions, make_gpt2, reinforce_step, reinforce_rollout_step, shaped_reward, trainable_actor
+from tlab2.baselines import PopularityBaseline
 
 
 def test_model_is_gpt2_and_reward_is_conditioned() -> None:
@@ -84,3 +85,36 @@ def test_multi_step_reinforce_returns_finite_gradients() -> None:
     with pytest.raises(ValueError):
         reinforce_rollout_step(actor, model, rm, x, counts, durations,
                                "completion", kl_beta=0.1, horizon=0)
+
+
+def test_left_padding_gpt2_position_ids_exclude_padding() -> None:
+    history = torch.tensor([[0, 0, 2, 3, 4], [0, 5, 6, 7, 8]])
+    mask, pos = _history_mask_and_positions(history)
+    assert mask.tolist() == [[0, 0, 1, 1, 1], [0, 1, 1, 1, 1]]
+    assert pos.tolist() == [[0, 0, 0, 1, 2], [0, 0, 1, 2, 3]]
+
+
+def test_out_of_catalog_next_items_are_misses_not_discarded() -> None:
+    from tlab2.experiment import evaluate
+    model = make_gpt2(vocab_size=12, context_length=5, hidden=32, layers=1, heads=4)
+    model.eval()
+    rm = RewardModel(model, hidden=32)
+    # Item 1 is OOV and cannot be recommended by any model.
+    sample = Examples(
+        np.asarray([[0, 0, 2, 3, 4]] * 3, dtype=np.int32),
+        np.asarray([2, 1, 2], dtype=np.int64),
+        np.asarray([.6, .8, .9], dtype=np.float32),
+        np.asarray([8, 8, 9], dtype=np.int64),
+        np.asarray([100, 200, 300], dtype=np.int64))
+    counts = torch.ones(12)
+    counts[2] = 50
+    policy = PopularityBaseline(counts.numpy())
+    result, per_query = evaluate(policy, sample, rm, rm, counts, torch.ones(12) * 200,
+                                 torch.device("cpu"), batch_size=2)
+    assert result["queries"] == 3
+    assert result["in_vocab_targets"] == 2
+    assert result["target_catalog_coverage"] == pytest.approx(2 / 3)
+    assert len(per_query) == 3
+    assert per_query[1] == 0
+    assert result["recall_at_10"] == pytest.approx(2 / 3)
+    assert result["conditional_recall_at_10"] == pytest.approx(1.0)
