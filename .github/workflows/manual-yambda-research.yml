@@ -28,6 +28,11 @@ on:
         type: choice
         options: ["0.65", "0.70", "0.75"]
         default: "0.70"
+      supervised_objective:
+        description: "Timestamp-safe dense autoregression or standard next-item ablation"
+        type: choice
+        options: ["time-safe-dense", "next-item-only"]
+        default: "time-safe-dense"
 
 permissions:
   contents: read
@@ -96,6 +101,11 @@ jobs:
             echo "RL_REWARDS=completion,conservative" >> "$GITHUB_ENV"
             echo "RL_BETAS=0.1" >> "$GITHUB_ENV"
           fi
+          if [ "${{ inputs.supervised_objective }}" = "next-item-only" ]; then
+            echo "DENSE_WEIGHT=0" >> "$GITHUB_ENV"
+          else
+            echo "DENSE_WEIGHT=0.65" >> "$GITHUB_ENV"
+          fi
       - name: Fit supervised GPT-2, reward models, RL variants, evaluate
         run: |
           python -m tlab2.experiment \
@@ -107,7 +117,7 @@ jobs:
             --base-steps "$BASE_STEPS" --reward-steps "$REWARD_STEPS" \
             --rl-steps "$RL_STEPS" --train-events "$TRAIN_EVENTS" \
             --batch "$BATCH" --context "$CONTEXT" --eval-per-user "$EVAL_PER_USER" \
-            --dense-weight 0.65 --reward-prior-smoothing 40 \
+            --dense-weight "$DENSE_WEIGHT" --reward-prior-smoothing 40 \
             --sft-patience 4 --reward-patience 5 \
             --rewards "$RL_REWARDS" \
             --betas "$RL_BETAS" --rl-horizons "$RL_HORIZONS" --rerank-alphas 0,1,3 \
@@ -127,6 +137,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: task2-yambda-cpu-${{ inputs.training }}-${{ inputs.users }}-seed${{ inputs.seed }}-train${{ inputs.train_fraction }}
+          name: task2-yambda-cpu-${{ inputs.training }}-${{ inputs.users }}-seed${{ inputs.seed }}-train${{ inputs.train_fraction }}-sft${{ inputs.supervised_objective }}
           path: outputs/yambda
           retention-days: 14
