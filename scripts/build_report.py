@@ -47,10 +47,21 @@ def report(result_path: Path) -> str:
         "",
     ]
     q = data["reward_quality_on_observed_events"]
-    lines += [table(["Модель и выборка", "MAE", "MAE константы", "RMSE", "RMSE константы", "Объектов"],
-                    [[name, metric(item["mae"]), metric(item["constant_mean_mae"]),
-                      metric(item["rmse"]), metric(item["constant_mean_rmse"]), metric(item["n_observed"])]
+    lines += [table(["Модель и выборка", "MAE", "MAE train-медианы",
+                     "MAE train-среднего", "MAE item-prior",
+                     "RMSE", "RMSE train-среднего", "RMSE item-prior", "Наблюдений"],
+                    [[name, metric(item["mae"]), metric(item.get("constant_median_mae")),
+                      metric(item["constant_mean_mae"]),
+                      metric(item.get("smoothed_item_prior_mae")),
+                      metric(item["rmse"]), metric(item["constant_mean_rmse"]),
+                      metric(item.get("smoothed_item_prior_rmse")),
+                      metric(item["n_observed"])]
                      for name, item in q.items() if isinstance(item, dict)]), ""]
+    lines += ["Модель награды теперь обучается как **прогноз среднего отклика** (MSE), "
+              "поэтому RMSE и сравнение с train-средним — основная проверка "
+              "условного ожидания; MAE сравнивается также с train-медианой. "
+              "Сглаженная item-prior строится из **собственных TRAIN-наблюдений** "
+              "каждой reward-модели и никогда из validation/test.", ""]
     lines += [
         "**Основные** Recall/NDCG учитывают выбранные будущие события вне обучающего "
         "каталога как неизбежные промахи. В отдельной колонке приведено покрытие "
@@ -58,6 +69,15 @@ def report(result_path: Path) -> str:
         "Conditional NDCG показывает качество только по доступным целям, "
         "поэтому не заменяет основную оценку.", "",
     ]
+    training_summary = data.get("training_checkpoint_diagnostics", {})
+    if training_summary:
+        lines += ["## Контроль обучения и остановки по validation", ""]
+        lines += [table(["Модель", "Шагов до остановки", "Лучшее validation loss", "Ранняя остановка"],
+                        [[name, metric(row.get("stopped_after_steps")),
+                          metric(row.get("selected_validation_cross_entropy",
+                                         row.get("selected_validation_mse"))),
+                          metric(row.get("stopped_early"))]
+                         for name, row in training_summary.items()]), ""]
     if data.get("selection_diagnostics"):
         sel = data["selection_diagnostics"]
         lines += ["## Зафиксированный выбор политики на validation", "",
