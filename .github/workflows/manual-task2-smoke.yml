@@ -26,12 +26,17 @@ jobs:
       - name: Synthetic end-to-end training
         run: |
           python -m tlab2.experiment \
-            --data data/synthetic_listens.csv --output outputs/smoke \
+            --data data/synthetic_listens.csv --source-kind synthetic --output outputs/smoke \
             --users 8 --vocab 64 --context 12 --train-events 300 \
             --hidden 32 --layers 1 --heads 4 --batch 4 \
             --base-steps 3 --reward-steps 3 --rl-steps 2 \
             --rewards completion,balanced --betas 0.02 --rl-horizons 1,5 --rerank-alphas 0,1 \
             --eval-per-user 2 --cpu
+      - name: Record exact environment and Git source
+        if: success()
+        run: |
+          python -m pip freeze > outputs/smoke/requirements-frozen.txt
+          git rev-parse HEAD > outputs/smoke/source-git-sha.txt
       - name: Build measured offline Markdown report
         if: success()
         run: python scripts/build_report.py --input outputs/smoke/experiment.json --output outputs/smoke/REPORT.md
