@@ -18,6 +18,7 @@ import torch
 from torch.nn import functional as F
 
 from tlab2.data import DataConfig, Examples, prepare, save_metadata
+from tlab2.baselines import PopularityBaseline, SequentialRulesBaseline
 from tlab2.models import (RewardModel, logits_for_next, make_gpt2, mask_special,
                           reinforce_step, reinforce_rollout_step, trainable_actor)
 
@@ -51,7 +52,7 @@ def train_base(policy, train: Examples, steps: int, batch_size: int, device, lea
     while iteration < steps:
         for x, y, _ in batches(train, batch_size, device, seed + iteration):
             opt.zero_grad(set_to_none=True)
-            loss = F.cross_entropy(mask_special(logits_for_next(policy, x)), y)
+            loss = F.cross_entropy(mask_special(policy_logits(policy, x)), y)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(policy.parameters(), 1.0)
             opt.step()
@@ -87,6 +88,13 @@ def train_reward(model: RewardModel, sample: Examples, steps: int, batch_size: i
     return logs
 
 
+def policy_logits(policy, context: torch.Tensor) -> torch.Tensor:
+    """One score API for GPT-2 and both TRAIN-only non-neural baselines."""
+    if hasattr(policy, "score"):
+        return policy.score(context)
+    return logits_for_next(policy, context)
+
+
 @torch.no_grad()
 def reward_quality(model: RewardModel, sample: Examples, prior_mean: float,
                    batch_size: int, device) -> dict:
@@ -112,7 +120,8 @@ def evaluate(policy, sample: Examples, reward: RewardModel, audit: RewardModel,
              topk: int = 10, rerank_alpha: float | None = None,
              rerank_candidates: int = 50) -> tuple[dict, np.ndarray]:
     """One held-out observed next event per example; test ground truth is *not* impressions."""
-    policy.eval()
+    if hasattr(policy, "eval"):
+        policy.eval()
     reward.eval()
     audit.eval()
     limit = min(topk, counts.numel() - 2)
@@ -126,12 +135,12 @@ def evaluate(policy, sample: Examples, reward: RewardModel, audit: RewardModel,
     rm_audit = []
     expected_listened_seconds = []
     for x, y, _ in batches(sample, batch_size, device, seed=0, shuffle=False):
-        logits = mask_special(logits_for_next(policy, x))
+        logits = mask_special(policy_logits(policy, x))
         if rerank_alpha is not None:
             m = min(rerank_candidates, logits.size(-1) - 2)
             candidates = logits.topk(m, dim=-1).indices
             predicted = reward(x, candidates)
-            original = logits.gather(1, candidates)
+            original = F.log_softmax(logits, dim=-1).gather(1, candidates)
             final_order = (original + rerank_alpha * predicted).topk(limit, dim=-1).indices
             top = candidates.gather(1, final_order)
         else:
@@ -177,12 +186,12 @@ def rollout(policy, sample: Examples, reward: RewardModel, device, batch_size: i
         context = x.clone()
         slate = []
         for t in range(steps):
-            scores = mask_special(logits_for_next(policy, context))
+            scores = mask_special(policy_logits(policy, context))
             if rerank_alpha is None:
                 action = scores.argmax(dim=-1)
             else:
                 candidate = scores.topk(min(50, scores.shape[-1] - 2), dim=-1).indices
-                adjusted = scores.gather(1, candidate) + rerank_alpha * reward(context, candidate)
+                adjusted = F.log_softmax(scores, dim=-1).gather(1, candidate) + rerank_alpha * reward(context, candidate)
                 action = candidate.gather(1, adjusted.argmax(dim=-1, keepdim=True)).squeeze(1)
             out[t].extend(reward(context, action).cpu().tolist())
             seen = (context == action.unsqueeze(1)).any(dim=1)
@@ -205,10 +214,10 @@ def real_vs_hypothetical_rollout(policy, sample: Examples, device, reward: Rewar
     policy.eval()
     reward.eval()
     def predict(context: torch.Tensor) -> torch.Tensor:
-        logits = mask_special(logits_for_next(policy, context))
+        logits = mask_special(policy_logits(policy, context))
         if rerank_alpha is not None:
             top = logits.topk(min(50, logits.size(-1) - 2), dim=-1).indices
-            adjusted = logits.gather(1, top) + rerank_alpha * reward(context, top)
+            adjusted = F.log_softmax(logits, dim=-1).gather(1, top) + rerank_alpha * reward(context, top)
             original = logits
             logits = torch.full_like(original, torch.finfo(original.dtype).min)
             logits.scatter_(1, top, adjusted)
@@ -360,6 +369,16 @@ def run(args) -> dict:
     eligible = [(name, scores) for name, scores in validation.items()
                 if scores["ndcg_at_10"] >= base_valid["ndcg_at_10"] - args.allowed_ndcg_drop]
     selected = max(eligible, key=lambda kv: kv[1]["auditor_completion_at_10"])[0] if eligible else "gpt2"
+    # Simple, TRAIN-only controls; not eligible for RL configuration selection.
+    simple = {
+        "popularity": PopularityBaseline(data.train_counts),
+        "sequential_rules": SequentialRulesBaseline(data.train, data.train_counts),
+    }
+    for name, model in simple.items():
+        metrics, _ = evaluate(model, data.valid, reward, audit, counts, durations,
+                              device, args.batch)
+        validation[name] = metrics
+
     # All test evaluation happens after validation-only model selection.
     reward_metrics["optimized_test"] = reward_quality(reward, data.test, float(optim_train.completion.mean()), args.batch, device)
     reward_metrics["auditor_test"] = reward_quality(audit, data.test, float(auditor_train.completion.mean()), args.batch, device)
@@ -370,6 +389,11 @@ def run(args) -> dict:
                                 args.batch, rerank_alpha=alpha)
         test_results[name] = result
         test_ndcg[name] = ndcg
+    for name, model in simple.items():
+        metrics, individual_ndcg = evaluate(model, data.test, reward, audit,
+                                             counts, durations, device, args.batch)
+        test_results[name] = metrics
+        test_ndcg[name] = individual_ndcg
     test_deltas = {name: bootstrap_delta(v, test_ndcg["gpt2"], data.test.user, args.seed)
                    for name, v in test_ndcg.items() if name != "gpt2"}
     # Compare open-loop, hypothetical autoregressive five-item behavior.
