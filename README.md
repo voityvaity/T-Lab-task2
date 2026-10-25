@@ -10,7 +10,9 @@
 
 **Научные источники и ограничения:** [обзор GPTRec-RL, ROLeR и Spotify Research](research/RELATED_WORK_AND_ABLATIONS.md).
 
-**Повторная проверка перед запуском:** [аудит 25.10.2026 с исправлениями GPT-2 position IDs, OOV-метрик, CI-preflight и тестовых сценариев](research/RE_AUDIT_2026-10-25.md). **Изменения пока не подтверждены успешным GitHub Actions.**\n\n## Выбор данных
+**Повторная проверка перед запуском:** [аудит 25.10.2026 с исправлениями GPT-2 position IDs, OOV-метрик, CI-preflight и тестовых сценариев](research/RE_AUDIT_2026-10-25.md). **Изменения пока не подтверждены успешным GitHub Actions.**
+
+## Выбор данных
 
 [Yandex Yambda-50M](https://huggingface.co/datasets/yandex/yambda). Официально: 10 000 пользователей, 934 057 треков, 46 467 212 прослушиваний, 881 456 лайков и 107 776 дизлайков. Плоский `listens.parquet` содержит `uid, item_id, timestamp, is_organic, played_ratio_pct, track_length_seconds`. `played_ratio_pct` может превышать 100 при повторных прослушиваниях; `timestamp` измеряется пятисекундными интервалами, а не Unix-секундами.
 
@@ -45,7 +47,9 @@
 - `src/tlab2/data.py`: потоковое чтение Parquet, общие временные границы, выбор пользователей по TRAIN, словарь только из TRAIN, reservoir-sampling обучающих примеров, OOV-контексты и честные OOV-промахи в оценке, защита от событий с одинаковой пятисекундной меткой.
 - `src/tlab2/models.py`: GPT2LMHeadModel **с нуля**, reward head на замороженных GPT-2 признаках (контекст + item), одношаговый и пятишаговый REINFORCE (гипотетические переходы), дисконтированную награду и точный policy KL к исходному GPT-2.
 - `src/tlab2/experiment.py`: обучение GPT-2, трёх reward-head (основная/uncertainty на одном TRAIN-пуле, auditor — на другом), четыре вида reward, два горизонта RL, разные KL, reranking по log-prob, baseline-метрики, user-cluster bootstrap, многократная генерация и JS-divergence.
-- `src/tlab2/baselines.py`: train-only Popularity и простая последовательная модель переходов для контроля мощности GPT-2.\n- `research/RELATED_WORK_AND_ABLATIONS.md`: научный обзор, конкретное происхождение идей, ограничения точности и план абляций.\n- `tests/`: тесты причинного time split, RL-градиентов, uncertain reward, простых baseline, session-return proxy и запрета выдавать synthetic smoke за реальные результаты.
+- `src/tlab2/baselines.py`: train-only Popularity и простая последовательная модель переходов для контроля мощности GPT-2.
+- `research/RELATED_WORK_AND_ABLATIONS.md`: научный обзор, конкретное происхождение идей, ограничения точности и план абляций.
+- `tests/`: тесты причинного time split, RL-градиентов, uncertain reward, простых baseline, session-return proxy и запрета выдавать synthetic smoke за реальные результаты.
 - `.github/workflows/`: **только ручные** smoke и настоящий Yambda-run. До запуска этих workflow нельзя называть код испытанным или результаты измеренными.
 
 **Отчёт намеренно не содержит придуманных метрик.** Следующие шаги — выполнить smoke, исправить найденные ошибки, провести реальные эксперименты на нескольких seeds, сохранить артефакты, дополнить анализ и только после этого готовить окончательный конкурсный README.
