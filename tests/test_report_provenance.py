@@ -58,3 +58,10 @@ def test_yambda_report_labels_measured_offline_only(tmp_path: Path) -> None:
     text = module.report(path)
     assert "Yambda-50M" in text
     assert "не доказывает" in text
+
+
+def test_experiment_refuses_synthetic_csv_disguised_as_yambda():
+    from argparse import Namespace
+    from tlab2.experiment import run
+    with pytest.raises(ValueError, match="version-pinned Parquet"):
+        run(Namespace(data="data/synthetic_listens.csv", source_kind="yambda"))
