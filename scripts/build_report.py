@@ -61,12 +61,12 @@ def report(result_path: Path) -> str:
     if data.get("selection_diagnostics"):
         sel = data["selection_diagnostics"]
         lines += ["## Зафиксированный выбор политики на validation", "",
-                  f"- Победитель: \`{sel['selected']}\`.",
+                  f"- Победитель: `{sel['selected']}`.",
                   f"- Validation NDCG baseline: {metric(sel['baseline_ndcg'])}; "
                   f"минимально допустимый NDCG: {metric(sel['ndcg_floor'])}.",
                   f"- Допущено снижение не более {metric(sel['max_relative_ndcg_drop'] * 100)}% "
                   f"и одновременно не более {metric(sel['max_absolute_ndcg_drop'])} абсолютных NDCG.",
-                  f"- Решение: \`{sel['reason']}\`. Здесь нет онлайн-оценки.", ""]
+                  f"- Решение: `{sel['reason']}`. Здесь нет онлайн-оценки.", ""]
     for split in ("validation", "test"):
         frontier = data.get(f"{split}_pareto_frontier", [])
         if split == "test":
