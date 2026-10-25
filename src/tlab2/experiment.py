@@ -195,6 +195,18 @@ def train_reward(model: RewardModel, sample: Examples, steps: int, batch_size: i
     no_progress = 0
     early_stop = False
     eval_interval = max(1, steps // 12)
+    if validation is not None:
+        # A learned residual should not be forced into use if the smoothed
+        # train-only prior predicts future observations better. Treat the
+        # initial zero-residual head as checkpoint 0.
+        best_mse = reward_validation_mse(model, validation, batch_size, device)
+        if math.isfinite(best_mse):
+            best_head = deepcopy(model.head.state_dict())
+        logs.append({"step": 0,
+                     "validation_mse_in_vocab_observed": (
+                         best_mse if math.isfinite(best_mse) else None),
+                     "candidate": "train_only_smoothed_item_prior"})
+        model.train()
     while iteration < steps and not early_stop:
         for x, y, label in batches(sample, batch_size, device, seed + iteration):
             opt.zero_grad(set_to_none=True)
