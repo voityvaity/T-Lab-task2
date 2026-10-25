@@ -50,11 +50,15 @@ jobs:
             echo "REWARD_STEPS=300" >> "$GITHUB_ENV"
             echo "RL_STEPS=180" >> "$GITHUB_ENV"
             echo "RL_HORIZONS=1,5" >> "$GITHUB_ENV"
+            echo "RL_REWARDS=completion,watch_time,balanced,conservative" >> "$GITHUB_ENV"
+            echo "RL_BETAS=0.02,0.2" >> "$GITHUB_ENV"
           else
             echo "BASE_STEPS=120" >> "$GITHUB_ENV"
             echo "REWARD_STEPS=80" >> "$GITHUB_ENV"
             echo "RL_STEPS=40" >> "$GITHUB_ENV"
             echo "RL_HORIZONS=1" >> "$GITHUB_ENV"
+            echo "RL_REWARDS=completion,conservative" >> "$GITHUB_ENV"
+            echo "RL_BETAS=0.1" >> "$GITHUB_ENV"
           fi
       - name: Fit supervised GPT-2, reward models, RL variants, evaluate
         run: |
@@ -65,9 +69,14 @@ jobs:
             --base-steps "$BASE_STEPS" --reward-steps "$REWARD_STEPS" \
             --rl-steps "$RL_STEPS" --train-events 30000 \
             --batch 32 --context 32 --eval-per-user 5 \
-            --rewards completion,watch_time,balanced \
-            --betas 0.02,0.2 --rl-horizons "$RL_HORIZONS" --rerank-alphas 0,1,3 \
+            --rewards "$RL_REWARDS" \
+            --betas "$RL_BETAS" --rl-horizons "$RL_HORIZONS" --rerank-alphas 0,1,3 \
             --cpu
+      - name: Record exact Python package versions and Git commit
+        if: success()
+        run: |
+          python -m pip freeze > outputs/yambda/requirements-frozen.txt
+          git rev-parse HEAD > outputs/yambda/source-git-sha.txt
       - name: Build measured offline Markdown report
         if: success()
         run: python scripts/build_report.py --input outputs/yambda/experiment.json --output outputs/yambda/REPORT.md
