@@ -53,25 +53,50 @@ def mask_special(logits: torch.Tensor) -> torch.Tensor:
 
 
 class RewardModel(nn.Module):
-    """Observed completion ratio, conditional on frozen GPT-2 history/item features."""
+    """Completion expectation = train-only smoothed item prior + context residual.
 
-    def __init__(self, frozen_gpt2: GPT2LMHeadModel, hidden: int):
+    This is an *observational* conditional predictor, not a policy-response
+    simulator. Priors are fitted on each head's OWN train-user partition;
+    no validation/test responses enter feature construction.
+    """
+
+    def __init__(self, frozen_gpt2: GPT2LMHeadModel, hidden: int,
+                 item_prior=None, item_count=None, item_duration=None):
         super().__init__()
         self.encoder = frozen_gpt2
         self.encoder.requires_grad_(False)
         self.encoder.eval()
-        self.head = nn.Sequential(nn.Linear(hidden * 3, hidden), nn.GELU(),
+        vocab = frozen_gpt2.config.vocab_size
+        def aligned(values, fill):
+            if values is None:
+                return torch.full((vocab,), fill, dtype=torch.float32)
+            result = torch.as_tensor(values, dtype=torch.float32)
+            if result.shape != (vocab,):
+                raise ValueError("Reward priors must match GPT-2 training vocabulary")
+            return result.clone()
+        self.register_buffer("item_prior", aligned(item_prior, 0.5).clamp(0.01, 0.99))
+        self.register_buffer("item_count", aligned(item_count, 0.0).clamp(min=0))
+        self.register_buffer("item_duration", aligned(item_duration, 0.0).clamp(min=0))
+        self.head = nn.Sequential(nn.Linear(hidden * 3 + 5, hidden), nn.GELU(),
                                   nn.Linear(hidden, hidden // 2), nn.GELU(),
                                   nn.Linear(hidden // 2, 1))
+        # Exactly match the train-only empirical Bayes prior before fitting:
+        # the head starts with zero residual instead of random 50% forecasts.
+        nn.init.zeros_(self.head[-1].weight)
+        nn.init.zeros_(self.head[-1].bias)
 
     def train(self, mode: bool = True):
         super().train(mode)
-        # Remain frozen/deterministic even when the reward MLP is training.
         self.encoder.eval()
         return self
 
+    def prior(self, item: torch.Tensor) -> torch.Tensor:
+        return self.item_prior[item]
+
     def forward(self, context: torch.Tensor, item: torch.Tensor) -> torch.Tensor:
-        """item shape (B,) or (B, M), output corresponding (B,) or (B, M)."""
+        """Accept item (B,) or candidates (B,M), return corresponding expected completion."""
+        if item.ndim not in (1, 2) or item.shape[0] != context.shape[0]:
+            raise ValueError("item must have shape (batch,) or (batch,candidates)")
         with torch.no_grad():
             attention_mask, position_ids = _history_mask_and_positions(context)
             hidden = self.encoder.transformer(
@@ -81,8 +106,21 @@ class RewardModel(nn.Module):
             item_embedding = self.encoder.transformer.wte(item).detach()
         if item.ndim == 2:
             hidden = hidden.unsqueeze(1).expand_as(item_embedding)
-        x = torch.cat((hidden, item_embedding, hidden * item_embedding), dim=-1)
-        return self.head(x).squeeze(-1).sigmoid()
+        repeated = (context.unsqueeze(1) == item.unsqueeze(-1)).any(dim=-1).float() if item.ndim == 2 else (
+            context == item[:, None]).any(dim=-1).float()
+        prior = self.item_prior[item]
+        popularity = torch.log1p(self.item_count[item]) / torch.log1p(
+            self.item_count.max()).clamp(min=1)
+        duration = self.item_duration[item].clamp(max=600) / 600.0
+        history_fraction = (context != 0).float().mean(dim=1)
+        if item.ndim == 2:
+            history_fraction = history_fraction[:, None].expand_as(prior)
+        numerical = torch.stack((prior, popularity, duration, repeated, history_fraction), dim=-1)
+        features = torch.cat((hidden, item_embedding, hidden * item_embedding, numerical), dim=-1)
+        residual = self.head(features).squeeze(-1)
+        # Residual in log-odds space preserves [0,1] prediction boundaries.
+        logits = torch.logit(prior.clamp(0.01, 0.99)) + residual
+        return logits.sigmoid()
 
 
 def shaped_reward(pred_completion: torch.Tensor, actions: torch.Tensor,
