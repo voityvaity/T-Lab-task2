@@ -18,6 +18,8 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
+          # CPU-only wheel avoids multi-GB CUDA dependencies on GitHub runners.
+          python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
           python -m pip install -e ".[train,dev]"
       - name: Dependency consistency and Python syntax
         run: |
