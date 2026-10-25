@@ -18,6 +18,16 @@ on:
         type: choice
         options: ["pilot", "research"]
         default: "pilot"
+      seed:
+        description: "Pre-registered replication seed"
+        type: choice
+        options: ["42", "43", "44"]
+        default: "42"
+      train_fraction:
+        description: "Absolute timeline fraction used for train (valid=0.15)"
+        type: choice
+        options: ["0.65", "0.70", "0.75"]
+        default: "0.70"
 
 permissions:
   contents: read
@@ -70,6 +80,8 @@ jobs:
             --data data/flat/50m/listens.parquet --source-kind yambda \
             --output outputs/yambda \
             --users "${{ inputs.users }}" --vocab "${{ inputs.vocab }}" \
+            --seed "${{ inputs.seed }}" --train-fraction "${{ inputs.train_fraction }}" \
+            --valid-fraction 0.15 \
             --base-steps "$BASE_STEPS" --reward-steps "$REWARD_STEPS" \
             --rl-steps "$RL_STEPS" --train-events 30000 \
             --batch 32 --context 32 --eval-per-user 5 \
@@ -91,6 +103,6 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: task2-yambda-cpu-${{ inputs.training }}-${{ inputs.users }}
+          name: task2-yambda-cpu-${{ inputs.training }}-${{ inputs.users }}-seed${{ inputs.seed }}-train${{ inputs.train_fraction }}
           path: outputs/yambda
           retention-days: 14
