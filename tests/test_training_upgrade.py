@@ -180,7 +180,10 @@ def test_same_time_targets_in_train_examples_preserve_original_mask(tmp_path):
     assert np.all(np.where(prepared.train.context == 0,
                            prepared.train.context_timestamps == -1,
                            prepared.train.context_timestamps < prepared.train.timestamp[:, None]))
-    ties = np.any(np.diff(prepared.train.context_timestamps, axis=1) == 0, axis=1)
+    same_time = (np.diff(prepared.train.context_timestamps, axis=1) == 0)
+    both_real = ((prepared.train.context[:, 1:] != 0) &
+                 (prepared.train.context[:, :-1] != 0))
+    ties = np.any(same_time & both_real, axis=1)
     assert ties.any()
     idx = np.flatnonzero(ties)[0]
     model = make_gpt2(vocab_size=len(prepared.train_counts), context_length=8,
