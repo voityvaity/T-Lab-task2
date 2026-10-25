@@ -68,3 +68,19 @@ def test_invalid_configuration_raises(tmp_path: Path) -> None:
         prepare(path, DataConfig(train_fraction=0.9, valid_fraction=0.15))
     with pytest.raises(ValueError):
         prepare(path, DataConfig(context_length=0))
+
+
+def test_same_timestamp_does_not_look_ahead(tmp_path: Path) -> None:
+    df = fake_events()
+    # Two events from one user share a five-second time bucket.
+    # Neither can be used as context for the other.
+    df = pd.concat([df, pd.DataFrame([{"uid": 10, "item_id": 22,
+                                      "timestamp": 35, "played_ratio_pct": 80,
+                                      "track_length_seconds": 160}])], ignore_index=True)
+    path = tmp_path / "ties.csv"
+    df.to_csv(path, index=False)
+    all_data = prepare(path, DataConfig(users=8, vocab_size=11, context_length=8,
+                                        train_events=2000, eval_events_per_user=20))
+    indexes = np.flatnonzero((all_data.train.user == 10) & (all_data.train.timestamp == 35))
+    assert len(indexes) == 2
+    assert np.array_equal(all_data.train.context[indexes[0]], all_data.train.context[indexes[1]])
