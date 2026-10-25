@@ -18,6 +18,11 @@ def validate_smoke_results(path: Path) -> dict:
     required = {"gpt2", "rerank_0.0", "popularity", "sequential_rules", "smoothed_transition"}
     if not required.issubset(actual):
         raise AssertionError(f"Missing ranking controls: {required - set(actual)}")
+    # alpha=0 post-hoc reranking is exactly the same ranking as GPT-2.
+    # Any discrepancy here means the ranking implementations are inconsistent.
+    for metric in ("recall_at_10", "ndcg_at_10"):
+        if abs(actual["gpt2"][metric] - actual["rerank_0.0"][metric]) > 1e-7:
+            raise AssertionError(f"Zero-reward reranking changed {metric}")
     rl = [name for name in actual if name.startswith("rl_")]
     if not any("_h1_" in name for name in rl):
         raise AssertionError("No one-step RL model was tested")
