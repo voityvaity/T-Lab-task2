@@ -23,12 +23,18 @@ def report(result_path: Path) -> str:
     if not result_path.is_file():
         raise FileNotFoundError("No actual experiment.json found: cannot generate an invented results report")
     data = json.loads(result_path.read_text(encoding="utf-8"))
-    if data.get("status") != "measured_offline_model_based_not_causal":
-        raise ValueError("Unknown experiment status; refuse to report it as a measured run")
+    source = data.get("source_kind")
+    expected = {"synthetic": "synthetic_smoke_only",
+                "yambda": "measured_offline_model_based_not_causal"}
+    if source not in expected or data.get("status") != expected[source]:
+        raise ValueError("Unknown or mismatched data source/status; refuse to present unverified results")
+    heading = ("СИНТЕТИЧЕСКИЙ SMOKE — НЕ КОНКУРСНЫЕ РЕЗУЛЬТАТЫ"
+               if source == "synthetic" else "Yambda-50M — реальный офлайн-эксперимент")
     lines = [
         "# Отчёт: T-Lab 2026 / RL-последовательные рекомендации",
         "",
-        "> Автоматически создан из `experiment.json`; числа относятся к **офлайн-моделям** и не означают рост онлайн-удержания.",
+        f"> **{heading}.** Автоматически создан из `experiment.json`. "
+        "Модельное вознаграждение не доказывает причинный рост удержания.",
         "",
         "## Протокол",
         "",
