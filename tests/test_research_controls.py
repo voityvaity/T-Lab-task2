@@ -5,7 +5,7 @@ import pytest
 torch = pytest.importorskip("torch")
 pytest.importorskip("transformers")
 
-from tlab2.baselines import PopularityBaseline, SequentialRulesBaseline
+from tlab2.baselines import PopularityBaseline, SequentialRulesBaseline, SmoothedTransitionBaseline
 from tlab2.data import Examples
 from tlab2.models import RewardModel, make_gpt2, reinforce_rollout_step, reinforce_step, shaped_reward, trainable_actor
 
@@ -78,3 +78,20 @@ def test_conservative_rl_uses_uncertainty_reward_head():
     )
     assert torch.isfinite(loss)
     assert summary["horizon"] == 2
+
+
+def test_smoothed_multilag_transition_is_deterministic_and_train_only():
+    training = example_data()
+    counts = np.asarray([0, 0, 10, 10, 3, 5, 5, 1, 1, 1, 1, 1], dtype=np.int64)
+    model = SmoothedTransitionBaseline(training, counts, max_lag=3)
+    x = torch.tensor([[0, 0, 2, 3], [0, 0, 5, 6]])
+    scores = model.score(x)
+    assert torch.equal(scores, model.score(x))
+    assert scores.shape == (2, len(counts))
+    assert scores[0, 4] > scores[0, 7]
+    assert scores[1, 7] > scores[1, 4]
+    assert scores[0, 0] < -100000
+    for kwargs in ({"max_lag": 0}, {"decay": 0}, {"smoothing": 0},
+                   {"pop_boost": -1}):
+        with pytest.raises(ValueError):
+            SmoothedTransitionBaseline(training, counts, **kwargs)
