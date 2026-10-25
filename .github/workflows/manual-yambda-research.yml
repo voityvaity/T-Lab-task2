@@ -63,7 +63,7 @@ jobs:
       - name: Fit supervised GPT-2, reward models, RL variants, evaluate
         run: |
           python -m tlab2.experiment \
-            --data data/flat/50m/listens.parquet \
+            --data data/flat/50m/listens.parquet --source-kind yambda \
             --output outputs/yambda \
             --users "${{ inputs.users }}" --vocab "${{ inputs.vocab }}" \
             --base-steps "$BASE_STEPS" --reward-steps "$REWARD_STEPS" \
