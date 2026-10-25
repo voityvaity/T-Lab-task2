@@ -54,11 +54,11 @@ def select_policy(
         "max_relative_ndcg_drop": max_relative_ndcg_drop,
         "max_absolute_ndcg_drop": max_absolute_ndcg_drop,
         "min_auditor_gain": min_auditor_gain,
-        "auditor_beats_constant_validation_mae": bool(auditor_is_useful),
-        "optimized_beats_constant_validation_mae": bool(optimized_is_useful),
+        "auditor_beats_constant_validation_rmse": bool(auditor_is_useful),
+        "optimized_beats_constant_validation_rmse": bool(optimized_is_useful),
         "eligible_alternatives": [x[0] for x in eligible],
-        "reason": ("auditor_failed_constant_mae_guard" if not auditor_is_useful
-                   else "optimized_reward_failed_constant_mae_guard" if not optimized_is_useful
+        "reason": ("auditor_failed_constant_rmse_guard" if not auditor_is_useful
+                   else "optimized_reward_failed_constant_rmse_guard" if not optimized_is_useful
                    else "auditor_reward_gain_with_both_ndcg_guards" if eligible
                    else "no_candidate_passed_reward_and_ndcg_guards"),
         "independent_online_effect_established": False,
