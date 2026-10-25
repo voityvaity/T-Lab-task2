@@ -1,6 +1,6 @@
 # T-Lab 2026 · Task 2: RL для последовательных рекомендаций
 
-**Статус: первая версия исходного кода написана; GitHub Actions и реальные эксперименты пока не запускались, научные результаты пока не подтверждены.** Этот репозиторий — самостоятельное решение задания №2 Академии Т-Банка. Задание №1 находится в другом репозитории и не подменяет результаты этой работы.
+**Статус на 25.10.2026: исследовательская реализация расширена по итогам сравнения с опубликованными работами; подтверждённых запусков GitHub Actions и численных результатов Yambda пока нет.** Этот репозиторий — самостоятельное решение задания №2 Академии Т-Банка. Задание №1 находится в другом репозитории и не подменяет результаты этой работы.
 
 ## Исследовательский вопрос
 
@@ -8,7 +8,7 @@
 
 **Важно:** увеличение оценки обученной reward model **не является доказательством** улучшения пользовательского опыта. Yambda не содержит достоверных логов всех показанных вариантов и вероятностей исторической политики, поэтому вне наблюдавшихся действий оценка контрфактического вознаграждения ненадёжна.
 
-## Выбор данных
+**Научные источники, конкретные улучшения и оставшиеся ограничения:** [обзор GPTRec-RL, ROLeR и Spotify Research](research/RELATED_WORK_AND_ABLATIONS.md).\n\n## Выбор данных
 
 [Yandex Yambda-50M](https://huggingface.co/datasets/yandex/yambda). Официально: 10 000 пользователей, 934 057 треков, 46 467 212 прослушиваний, 881 456 лайков и 107 776 дизлайков. Плоский `listens.parquet` содержит `uid, item_id, timestamp, is_organic, played_ratio_pct, track_length_seconds`. `played_ratio_pct` может превышать 100 при повторных прослушиваниях; `timestamp` измеряется пятисекундными интервалами, а не Unix-секундами.
 
@@ -18,13 +18,13 @@
 
 1. **Глобальный временной split.** Train, validation, test образуют последовательные непересекающиеся интервалы. Все пользователи имеют одинаковые абсолютные cutoffs. Для каждого оцениваемого события контекст состоит только из ранее наблюдавшихся событий, включая предшествующие события текущего тестового периода при прекаузальной (prequential) оценке.
 2. **GPT-2 from scratch.** Causal Transformer (GPT-2 architecture), token = идентификатор трека, задача next-item cross-entropy; `PAD=0`, `OOV=1`. Размеры слоёв, длина контекста, выборки, seed и версии библиотек фиксируются в конфигурации запусков.
-3. **Reward model.** Отдельная модель получает пользовательскую историю и candidate item. Учится на *действительно наблюдённых* воспроизведениях предсказывать `min(played_ratio_pct, 100)/100`. Ограничение: она не знает, как пользователь отреагировал бы на произвольно выбранный непрослушанный трек. Проверять MAE, ошибку против константного baseline, калибровку, сдвиг по длине/популярности.
-4. **Контроль без RL.** (a) исходный GPT-2, (b) post-hoc reranking top-M кандидатов по комбинации log-prob и reward. Все методы оцениваются в одинаковом каталоге и при одинаковых состояниях.
+3. **Reward model.** Три отдельные reward-head на одном замороженном GPT-2 encoder: основная и вторая (с иной инициализацией) задают эвристику штрафа за disagreement; третья обучается на непересекающихся TRAIN-пользователях для аудита. Отдельные головы **не гарантируют** надёжного контрфактического reward. Качество проверяется на реальных наблюдавшихся воспроизведениях; MAE и RMSE сравниваются с константой.
+4. **Контроль без RL.** Popularity, собственные облегчённые Sequential Rules, исходный GPT-2 и post-hoc reranking top-M по log-prob + reward. Одинаковые test queries, train-only каталог и единые метрики. Наши Sequential Rules — **не** точное воспроизведение официального Spotify PCTM/SeqRules.
 5. **RL.** On-policy REINFORCE с batch-baseline и регуляризацией KL(`policy || frozen GPT-2`). Изменяем KL-штраф и саму функцию reward; все гиперпараметры подбираются **только по validation**, тест раскрывается один раз после выбора вариантов.
-6. **Функции награды.** `completion` (предсказанная доля дослушивания); `watch_time` (предсказанные секунды прослушивания с ограничением выбросов); `balanced` (completion + умеренное поощрение новизны и штрафы за повтор/популярностную концентрацию). Эти proxy не считаются доказанной долгосрочной удовлетворённостью.
+6. **Функции награды.** `completion`, `watch_time`, `balanced` и `conservative` (минимум предсказаний двух reward-head). Последняя — эвристика чувствительности к неопределённости, **не ROLeR и не калиброванная граница**. Все proxy нельзя считать доказанной долгосрочной удовлетворённостью.
 7. **Оценка.** Recall@10 и NDCG@10 при one-next-item ground truth (Recall становится HitRate). Средняя предсказанная награда и, по возможности, независимая диагностическая reward model; catalog coverage, unique items/user, доля повторов, item popularity, concentration, item-length distribution, KL к исходной политике.
 8. **Пять шагов.** Teacher-forced контексты из реальной истории сравниваются со свободной генерацией, где рекомендованные треки добавляются в контекст *гипотетически*. Это **не** реальные пользовательские прослушивания. Измеряем рост расхождения предсказаний/сдвигов и явно показываем влияние допущений.
-9. **Долгосрочная цель.** Варианты proxy: повторное посещение после паузы, активность в следующей сессии, время до следующей сессии, число качественных воспроизведений за несколько дней. Для вывода о причинном росте retention нужен онлайн A/B-тест или более полный logged-bandit dataset с известными экспозициями/propensities.
+9. **Долгосрочная цель.** В отчёт включается наблюдаемая доля возвращений в течение 24 часов после окончания сессии (перерыв больше 30 минут), с правым цензурированием: брать только события с доступным полным горизонтом. Связь с долей дослушивания носит **ассоциативный, не причинный** характер. Для вывода об улучшении retention нужен онлайн A/B-тест или пригодные randomized logs.
 
 ## Правила научной добросовестности
 
@@ -42,8 +42,8 @@
 
 - `src/tlab2/data.py`: потоковое чтение Parquet, общие временные границы, выбор пользователей по TRAIN, словарь только из TRAIN, reservoir-sampling примеров, OOV-контексты, защита от событий с одинаковой пятисекундной меткой.
 - `src/tlab2/models.py`: GPT2LMHeadModel **с нуля**, reward head на замороженных GPT-2 признаках (контекст + item), одношаговый и пятишаговый REINFORCE (гипотетические переходы), дисконтированную награду и точный policy KL к исходному GPT-2.
-- `src/tlab2/experiment.py`: обучение базовой модели, двух reward heads на непересекающихся train-пользователях, три формы reward, два RL-горизонта, два KL-коэффициента, переранжирование, проверка по validation, тест после выбора, user-cluster bootstrap, отклонение пятишаговой генерации от реальной истории.
-- `tests/`: регрессионные тесты и проверка основных форм/градиентов.
+- `src/tlab2/experiment.py`: обучение GPT-2, трёх reward-head (основная/uncertainty на одном TRAIN-пуле, auditor — на другом), четыре вида reward, два горизонта RL, разные KL, reranking по log-prob, baseline-метрики, user-cluster bootstrap, многократная генерация и JS-divergence.
+- `src/tlab2/baselines.py`: train-only Popularity и простая последовательная модель переходов для контроля мощности GPT-2.\n- `research/RELATED_WORK_AND_ABLATIONS.md`: научный обзор, конкретное происхождение идей, ограничения точности и план абляций.\n- `tests/`: тесты причинного time split, RL-градиентов, uncertain reward, простых baseline, session-return proxy и запрета выдавать synthetic smoke за реальные результаты.
 - `.github/workflows/`: **только ручные** smoke и настоящий Yambda-run. До запуска этих workflow нельзя называть код испытанным или результаты измеренными.
 
 **Отчёт намеренно не содержит придуманных метрик.** Следующие шаги — выполнить smoke, исправить найденные ошибки, провести реальные эксперименты на нескольких seeds, сохранить артефакты, дополнить анализ и только после этого готовить окончательный конкурсный README.
@@ -56,7 +56,7 @@ Python 3.11+:
 python -m pip install -e ".[train,download,dev]"
 pytest -q
 python scripts/make_synthetic.py --users 8 --events 90
-python -m tlab2.experiment --data data/synthetic_listens.csv --output outputs/smoke --users 8 --vocab 64 --context 12 --hidden 32 --layers 1 --heads 4 --batch 4 --base-steps 3 --reward-steps 3 --rl-steps 2 --train-events 300 --rewards completion,balanced --betas 0.02 --cpu
+python -m tlab2.experiment --data data/synthetic_listens.csv --source-kind synthetic --output outputs/smoke --users 8 --vocab 64 --context 12 --hidden 32 --layers 1 --heads 4 --batch 4 --base-steps 3 --reward-steps 3 --rl-steps 2 --train-events 300 --rewards completion,balanced --betas 0.02 --cpu
 ```
 
 Этот синтетический прогон проверяет связность программ, **а не реальное качество алгоритма**.
@@ -65,12 +65,12 @@ python -m tlab2.experiment --data data/synthetic_listens.csv --output outputs/sm
 
 ```bash
 hf download yandex/yambda flat/50m/listens.parquet --repo-type dataset --revision e8b04458db77e2fb30a24e65f78923fa48b7d297 --local-dir data
-python -m tlab2.experiment --data data/flat/50m/listens.parquet --output outputs/yambda --users 128 --vocab 4096 --context 32 --train-events 30000 --base-steps 500 --reward-steps 200 --rl-steps 100
+python -m tlab2.experiment --data data/flat/50m/listens.parquet --source-kind yambda --output outputs/yambda --users 128 --vocab 4096 --context 32 --train-events 30000 --base-steps 500 --reward-steps 200 --rl-steps 100
 ```
 
-Для эксперимента на GPU PyTorch автоматически выберет CUDA при её доступности. На обычном CPU подобный прогон может требовать значительного времени, длительность не гарантируется. Сохраняются `dataset_protocol.json`, `experiment.json`, `training_logs.json` и checkpoints моделей. Программы не считают «негативами» треки без зарегистрированного отклика.
+Для эксперимента на GPU PyTorch автоматически выберет CUDA при её доступности. На обычном CPU подобный прогон может требовать значительного времени, длительность не гарантируется. Сохраняются `dataset_protocol.json`, `experiment.json`, `training_logs.json` и checkpoints моделей. Ручные workflows также сохраняют `requirements-frozen.txt` и `source-git-sha.txt` для воспроизводимости. Отчёт отказывается принимать противоречащие друг другу `source_kind` и `status`. Программы не считают «негативами» треки без зарегистрированного отклика.
 
-**Без собственного запуска:** в GitHub Actions имеются [Manual Task 2 smoke](https://github.com/voityvaity/T-Lab-task2/actions/workflows/manual-task2-smoke.yml) и [Manual Yambda-50M RL research](https://github.com/voityvaity/T-Lab-task2/actions/workflows/manual-yambda-research.yml). Обе задачи запускаются только вручную. Сначала тестируем synthetic smoke; реальный CPU pilot расходует GitHub Actions minutes и тоже требует ручного запуска. В режиме **pilot** проверяется одношаговый RL, а **research** включает также пятишаговую RL-оптимизацию; это существенно тяжелее вычислительно.
+**Без собственного запуска:** в GitHub Actions имеются [Manual Task 2 smoke](https://github.com/voityvaity/T-Lab-task2/actions/workflows/manual-task2-smoke.yml) и [Manual Yambda-50M RL research](https://github.com/voityvaity/T-Lab-task2/actions/workflows/manual-yambda-research.yml). Обе задачи запускаются только вручную. Сначала тестируем synthetic smoke; реальный CPU pilot расходует GitHub Actions minutes и тоже требует ручного запуска. В режиме **pilot** проверяются `completion` и `conservative` с одним KL и одношаговым RL; режим **research** проверяет четыре вида reward, два KL и пятишаговую оптимизацию. Оба режима требуют ручного запуска и расходуют Actions minutes.
 
 ### Что обязательно проверить после реального обучения
 
