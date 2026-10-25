@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tlab2-recsys-rl"
+version = "0.1.0"
+description = "Research protocol for GPT-2 sequential recommendations and reward-model RL on Yambda"
+requires-python = ">=3.11"
+dependencies = ["numpy>=1.26,<3", "pandas>=2.1,<3", "pyarrow>=15"]
+
+[project.optional-dependencies]
+train = ["torch>=2.2,<3", "transformers>=4.45,<5"]
+download = ["huggingface_hub>=0.25"]
+dev = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
