@@ -59,3 +59,12 @@ def test_integrity_check_rejects_real_data_mislabeled_as_smoke(tmp_path):
     p.write_text(json.dumps(data))
     with pytest.raises(AssertionError):
         checker()(p)
+
+
+def test_integrity_check_rejects_reranking_change_with_zero_weight(tmp_path):
+    data = payload()
+    data["test"]["rerank_0.0"]["ndcg_at_10"] = .03
+    p = tmp_path / "experiment.json"
+    p.write_text(json.dumps(data))
+    with pytest.raises(AssertionError, match="Zero-reward"):
+        checker()(p)
