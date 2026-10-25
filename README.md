@@ -41,8 +41,8 @@
 ## Что уже реализовано в коде (но пока не проверено запуском)
 
 - `src/tlab2/data.py`: потоковое чтение Parquet, общие временные границы, выбор пользователей по TRAIN, словарь только из TRAIN, reservoir-sampling примеров, OOV-контексты, защита от событий с одинаковой пятисекундной меткой.
-- `src/tlab2/models.py`: GPT2LMHeadModel **с нуля**, reward head на замороженных GPT-2 признаках (контекст + item), REINFORCE и точный policy KL к исходному GPT-2.
-- `src/tlab2/experiment.py`: обучение базовой модели, двух reward heads на непересекающихся train-пользователях, три формы reward, два KL-коэффициента, переранжирование, проверка по validation, тест после выбора, user-cluster bootstrap, отклонение пятишаговой генерации от реальной истории.
+- `src/tlab2/models.py`: GPT2LMHeadModel **с нуля**, reward head на замороженных GPT-2 признаках (контекст + item), одношаговый и пятишаговый REINFORCE (гипотетические переходы), дисконтированную награду и точный policy KL к исходному GPT-2.
+- `src/tlab2/experiment.py`: обучение базовой модели, двух reward heads на непересекающихся train-пользователях, три формы reward, два RL-горизонта, два KL-коэффициента, переранжирование, проверка по validation, тест после выбора, user-cluster bootstrap, отклонение пятишаговой генерации от реальной истории.
 - `tests/`: регрессионные тесты и проверка основных форм/градиентов.
 - `.github/workflows/`: **только ручные** smoke и настоящий Yambda-run. До запуска этих workflow нельзя называть код испытанным или результаты измеренными.
 
@@ -70,7 +70,7 @@ python -m tlab2.experiment --data data/flat/50m/listens.parquet --output outputs
 
 Для эксперимента на GPU PyTorch автоматически выберет CUDA при её доступности. На обычном CPU подобный прогон может требовать значительного времени, длительность не гарантируется. Сохраняются `dataset_protocol.json`, `experiment.json`, `training_logs.json` и checkpoints моделей. Программы не считают «негативами» треки без зарегистрированного отклика.
 
-**Без собственного запуска:** в GitHub Actions имеются [Manual Task 2 smoke](https://github.com/voityvaity/T-Lab-task2/actions/workflows/manual-task2-smoke.yml) и [Manual Yambda-50M RL research](https://github.com/voityvaity/T-Lab-task2/actions/workflows/manual-yambda-research.yml). Обе задачи запускаются только вручную. Сначала тестируем synthetic smoke; реальный CPU pilot расходует GitHub Actions minutes и тоже требует ручного запуска.
+**Без собственного запуска:** в GitHub Actions имеются [Manual Task 2 smoke](https://github.com/voityvaity/T-Lab-task2/actions/workflows/manual-task2-smoke.yml) и [Manual Yambda-50M RL research](https://github.com/voityvaity/T-Lab-task2/actions/workflows/manual-yambda-research.yml). Обе задачи запускаются только вручную. Сначала тестируем synthetic smoke; реальный CPU pilot расходует GitHub Actions minutes и тоже требует ручного запуска. В режиме **pilot** проверяется одношаговый RL, а **research** включает также пятишаговую RL-оптимизацию; это существенно тяжелее вычислительно.
 
 ### Что обязательно проверить после реального обучения
 
