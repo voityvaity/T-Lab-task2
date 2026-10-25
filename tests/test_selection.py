@@ -72,3 +72,19 @@ def test_auditor_must_be_better_than_constant_on_observed_validation():
     assert result["selected"] == "gpt2"
     assert result["reason"] == "auditor_failed_constant_mae_guard"
     assert result["auditor_beats_constant_validation_mae"] is False
+
+
+def test_microgain_is_not_confused_with_meaningful_reward_improvement():
+    small = {"gpt2": score(.20, .530000),
+             "rl_roundoff": score(.20, .530005)}
+    result = select_policy(small)
+    assert result["selected"] == "gpt2"
+    assert result["min_auditor_gain"] == pytest.approx(0.001)
+
+
+def test_optimized_reward_must_also_beat_constant_observed_mae():
+    choices = {"gpt2": score(.16, .40),
+               "rl": score(.16, .48)}
+    result = select_policy(choices, optimized_is_useful=False)
+    assert result["selected"] == "gpt2"
+    assert result["reason"] == "optimized_reward_failed_constant_mae_guard"
