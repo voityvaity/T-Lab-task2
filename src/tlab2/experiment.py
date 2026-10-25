@@ -74,7 +74,10 @@ def supervised_validation_loss(policy, data: Examples, batch_size: int,
 
 
 def dense_autoregressive_loss(policy, x: torch.Tensor, y: torch.Tensor,
-                              dense_weight: float = 0.6) -> tuple[torch.Tensor, dict]:
+                              dense_weight: float = 0.6,
+                              context_timestamps: torch.Tensor | None = None,
+                              target_timestamps: torch.Tensor | None = None
+                              ) -> tuple[torch.Tensor, dict]:
     """Use every valid causal transition inside the history, plus its next item.
 
     No target leaks into its own prediction: target at position t is history
@@ -82,20 +85,57 @@ def dense_autoregressive_loss(policy, x: torch.Tensor, y: torch.Tensor,
     """
     if not 0 <= dense_weight <= 1:
         raise ValueError("dense_weight must be in [0,1]")
+    if dense_weight > 0 and (context_timestamps is None or target_timestamps is None):
+        raise ValueError("Dense causal training requires timestamp metadata to mask same-time event order")
+    if context_timestamps is not None and context_timestamps.shape != x.shape:
+        raise ValueError("Context timestamps must match token context shape")
+    if target_timestamps is not None and target_timestamps.shape != y.shape:
+        raise ValueError("Target timestamps must match next-item shape")
     attention, position_ids = _history_mask_and_positions(x)
     logits = mask_special(policy(input_ids=x, attention_mask=attention,
                                  position_ids=position_ids).logits)
     last_ce = F.cross_entropy(logits[:, -1, :], y)
-    shifted = torch.cat((x[:, 1:], y[:, None]), dim=1)
-    allowed = (x != 0) & (shifted >= 2)
-    dense_targets = shifted.masked_fill(~allowed, -100)
-    # The LAST event is always valid in a training batch.
-    dense_ce = F.cross_entropy(logits.reshape(-1, logits.size(-1)),
-                               dense_targets.reshape(-1), ignore_index=-100)
+    if dense_weight == 0:
+        return last_ce, {"last_next_ce": float(last_ce.detach().item()),
+                         "dense_ce": None, "causal_transitions": 0,
+                         "same_timestamp_transitions_excluded": 0}
+    next_items = torch.cat((x[:, 1:], y[:, None]), dim=1)
+    next_times = torch.cat((context_timestamps[:, 1:],
+                            target_timestamps.unsqueeze(1)), dim=1)
+    # Even when two track events have different raw input-row order, five-second
+    # timestamp ties have UNKNOWN ordering. Do NOT train on such transitions.
+    possible = (x != 0) & (next_items >= 2)
+    strictly_later = next_times > context_timestamps
+    allowed = possible & strictly_later
+    dense_targets = next_items.masked_fill(~allowed, -100)
+    if not allowed.any():
+        # A batch with only same-time transitions still has safe supervised
+        # one-next targets; never produce NaN cross-entropy from all ignore_index.
+        dense_ce = last_ce
+    else:
+        dense_ce = F.cross_entropy(logits.reshape(-1, logits.size(-1)),
+                                   dense_targets.reshape(-1), ignore_index=-100)
     loss = (1.0 - dense_weight) * last_ce + dense_weight * dense_ce
+    excluded = possible & ~strictly_later
     return loss, {"last_next_ce": float(last_ce.detach().item()),
                   "dense_ce": float(dense_ce.detach().item()),
-                  "causal_transitions": int(allowed.sum().item())}
+                  "causal_transitions": int(allowed.sum().item()),
+                  "same_timestamp_transitions_excluded": int(excluded.sum().item())}
+
+
+def causal_train_batches(data: Examples, batch_size: int, device,
+                         seed: int):
+    """Preserve timestamp alignment through shuffled supervised train rows."""
+    if data.context_timestamps is None:
+        raise ValueError("Dense train batches need original context timestamps")
+    ids = np.arange(len(data))
+    np.random.default_rng(seed).shuffle(ids)
+    for start in range(0, len(ids), batch_size):
+        idx = ids[start:start + batch_size]
+        yield (torch.as_tensor(data.context[idx], dtype=torch.long, device=device),
+               torch.as_tensor(data.target[idx], dtype=torch.long, device=device),
+               torch.as_tensor(data.context_timestamps[idx], dtype=torch.long, device=device),
+               torch.as_tensor(data.timestamp[idx], dtype=torch.long, device=device))
 
 
 def train_base(policy, train: Examples, steps: int, batch_size: int, device,
@@ -118,9 +158,16 @@ def train_base(policy, train: Examples, steps: int, batch_size: int, device,
     early_stop = False
     eval_interval = max(1, steps // 12)
     while iteration < steps and not early_stop:
-        for x, y, _ in batches(train, batch_size, device, seed + iteration):
+        train_batches = (causal_train_batches(train, batch_size, device, seed + iteration)
+                         if dense_weight > 0 else
+                         ((x, y, None, None) for x, y, _ in
+                          batches(train, batch_size, device, seed + iteration)))
+        for x, y, ctx_times, target_times in train_batches:
             opt.zero_grad(set_to_none=True)
-            loss, train_stats = dense_autoregressive_loss(policy, x, y, dense_weight)
+            loss, train_stats = dense_autoregressive_loss(
+                policy, x, y, dense_weight,
+                context_timestamps=ctx_times, target_timestamps=target_times
+            )
             loss.backward()
             torch.nn.utils.clip_grad_norm_(policy.parameters(), 1.0)
             opt.step()
@@ -486,7 +533,8 @@ def bootstrap_delta(chosen: np.ndarray, baseline: np.ndarray, users: np.ndarray,
 
 def subset(data: Examples, mask: np.ndarray) -> Examples:
     return Examples(data.context[mask], data.target[mask], data.completion[mask],
-                    data.user[mask], data.timestamp[mask])
+                    data.user[mask], data.timestamp[mask],
+                    data.context_timestamps[mask] if data.context_timestamps is not None else None)
 
 
 def run(args) -> dict:
