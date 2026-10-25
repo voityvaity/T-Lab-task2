@@ -141,7 +141,7 @@ def evaluate(policy, sample: Examples, reward: RewardModel, audit: RewardModel,
             hits.append(float(len(found) != 0))
             scores.append(float(1.0 / np.log2(int(found[0]) + 2)) if len(found) else 0.0)
         recommended.extend(top.cpu().tolist())
-        repeated.extend((top == x.unsqueeze(1)).any(dim=-1).cpu().float().tolist())
+        repeated.extend((top.unsqueeze(-1) == x.unsqueeze(1)).any(dim=-1).float().mean(dim=-1).cpu().tolist())
         popularity.extend(torch.log1p(counts[top].float()).mean(dim=-1).cpu().tolist())
         lengths.extend(durations[top].float().mean(dim=-1).cpu().tolist())
         # Reward is only a learned extrapolation for these recommended items.
@@ -164,23 +164,26 @@ def evaluate(policy, sample: Examples, reward: RewardModel, audit: RewardModel,
 
 @torch.no_grad()
 def rollout(policy, sample: Examples, reward: RewardModel, device, batch_size: int,
-            steps: int = 5) -> list[dict]:
+            steps: int = 5, rerank_alpha: float | None = None) -> list[dict]:
     """Hypothetically feed recommended item back as if consumed: NOT real future listens."""
     policy.eval()
     out = [[] for _ in range(steps)]
-    unique_counts = [[] for _ in range(steps)]
     rec_seen = [[] for _ in range(steps)]
     for x, _, _ in batches(sample, batch_size, device, seed=0, shuffle=False):
         context = x.clone()
         slate = []
         for t in range(steps):
-            action = mask_special(logits_for_next(policy, context)).argmax(dim=-1)
+            scores = mask_special(logits_for_next(policy, context))
+            if rerank_alpha is None:
+                action = scores.argmax(dim=-1)
+            else:
+                candidate = scores.topk(min(50, scores.shape[-1] - 2), dim=-1).indices
+                adjusted = scores.gather(1, candidate) + rerank_alpha * reward(context, candidate)
+                action = candidate.gather(1, adjusted.argmax(dim=-1, keepdim=True)).squeeze(1)
             out[t].extend(reward(context, action).cpu().tolist())
             seen = (context == action.unsqueeze(1)).any(dim=1)
             rec_seen[t].extend(seen.float().cpu().tolist())
             slate.append(action)
-            unique_counts[t].extend((torch.stack(slate, dim=1).unique(dim=1).shape[1]
-                                     for _ in range(len(action)))) if False else None
             context = torch.cat([context[:, 1:], action.unsqueeze(1)], dim=1)
     return [{"step": i + 1, "mean_predicted_completion": float(np.mean(out[i])),
              "repeat_of_context_rate": float(np.mean(rec_seen[i]))}
@@ -202,6 +205,7 @@ def subset(data: Examples, mask: np.ndarray) -> Examples:
 
 def run(args) -> dict:
     seed_all(args.seed)
+    torch.set_num_threads(min(4, max(1, torch.get_num_threads())))
     device = torch.device("cuda" if torch.cuda.is_available() and not args.cpu else "cpu")
     cfg = DataConfig(users=args.users, vocab_size=args.vocab, context_length=args.context,
                      train_events=args.train_events, seed=args.seed,
@@ -239,9 +243,7 @@ def run(args) -> dict:
     torch.save(audit.head.state_dict(), out / "auditor_head.pt")
     reward_metrics = {
         "optimized_valid": reward_quality(reward, data.valid, float(optim_train.completion.mean()), args.batch, device),
-        "optimized_test": reward_quality(reward, data.test, float(optim_train.completion.mean()), args.batch, device),
         "auditor_valid": reward_quality(audit, data.valid, float(auditor_train.completion.mean()), args.batch, device),
-        "auditor_test": reward_quality(audit, data.test, float(auditor_train.completion.mean()), args.batch, device),
         "auditor_train_user_disjoint": True,
     }
     base_valid, _ = evaluate(base, data.valid, reward, audit, counts, durations, device, args.batch)
@@ -288,7 +290,9 @@ def run(args) -> dict:
     eligible = [(name, scores) for name, scores in validation.items()
                 if scores["ndcg_at_10"] >= base_valid["ndcg_at_10"] - args.allowed_ndcg_drop]
     selected = max(eligible, key=lambda kv: kv[1]["auditor_completion_at_10"])[0] if eligible else "gpt2"
-    # Report all compared models on untouched test, not only the "winner".
+    # All test evaluation happens after validation-only model selection.
+    reward_metrics["optimized_test"] = reward_quality(reward, data.test, float(optim_train.completion.mean()), args.batch, device)
+    reward_metrics["auditor_test"] = reward_quality(audit, data.test, float(auditor_train.completion.mean()), args.batch, device)
     test_results = {}
     test_ndcg = {}
     for name, (policy, alpha, kind) in candidates.items():
@@ -299,7 +303,7 @@ def run(args) -> dict:
     test_deltas = {name: bootstrap_delta(v, test_ndcg["gpt2"], args.seed)
                    for name, v in test_ndcg.items() if name != "gpt2"}
     # Compare open-loop, hypothetical autoregressive five-item behavior.
-    rollouts = {name: rollout(policy, data.test, reward, device, args.batch, steps=5)
+    rollouts = {name: rollout(policy, data.test, reward, device, args.batch, steps=5, rerank_alpha=alpha)
                 for name, (policy, alpha, kind) in candidates.items()
                 if name == "gpt2" or name == selected or (name.startswith("rl_") and kind == "completion")}
     results = {
