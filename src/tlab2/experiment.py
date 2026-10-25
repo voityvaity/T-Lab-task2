@@ -513,6 +513,10 @@ def run(args) -> dict:
             reward_metrics["auditor_valid"]["mae"]
             < reward_metrics["auditor_valid"]["constant_mean_mae"]
         ),
+        optimized_is_useful=(
+            reward_metrics["optimized_valid"]["mae"]
+            < reward_metrics["optimized_valid"]["constant_mean_mae"]
+        ),
     )
     selected = selection["selected"]
     # Simple, TRAIN-only controls; not eligible for RL configuration selection.
@@ -526,6 +530,12 @@ def run(args) -> dict:
                               device, args.batch)
         validation[name] = metrics
 
+    # The scientific RL comparison is to supervised GPT-2, but a practical
+    # accuracy benchmark must also report the strongest validation non-RL
+    # control. Do NOT let RL overtake GPT-2 on predicted reward and hide
+    # large losses versus an interpretable sequential model.
+    non_rl = ("gpt2", "popularity", "sequential_rules", "smoothed_transition")
+    strongest_accuracy_control = max(non_rl, key=lambda name: validation[name]["ndcg_at_10"])
     # All test evaluation happens after validation-only model selection.
     reward_metrics["optimized_test"] = reward_quality(reward, data.test, float(optim_train.completion.mean()), args.batch, device, train_counts=counts)
     reward_metrics["auditor_test"] = reward_quality(audit, data.test, float(auditor_train.completion.mean()), args.batch, device, train_counts=counts)
@@ -558,6 +568,11 @@ def run(args) -> dict:
         "selected_on_validation": selected,
         "selection_rule": "maximize auditor reward subject to absolute and relative validation NDCG guards",
         "selection_diagnostics": selection,
+        "strongest_non_rl_accuracy_baseline_on_validation": strongest_accuracy_control,
+        "selected_model_competitive_with_strongest_baseline_on_validation": (
+            validation[selected]["ndcg_at_10"] >=
+            validation[strongest_accuracy_control]["ndcg_at_10"]
+        ),
         "device": str(device),
         "seed": args.seed,
         "software": {"python": platform.python_version(), "torch": torch.__version__},
@@ -617,8 +632,8 @@ def main() -> None:
                    help="Reject candidates losing >5 percent of baseline validation NDCG")
     p.add_argument("--max-absolute-ndcg-drop", type=float, default=0.005,
                    help="Independent absolute upper bound on validation NDCG loss")
-    p.add_argument("--min-auditor-gain", type=float, default=0.0,
-                   help="Require positive auditor reward gain to select non-baseline")
+    p.add_argument("--min-auditor-gain", type=float, default=0.001,
+                   help="Validation auditor completion must gain at least 0.001 vs GPT-2 to select candidate")
     p.add_argument("--cpu", action="store_true")
     args = p.parse_args()
     result = run(args)
