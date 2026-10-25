@@ -137,7 +137,7 @@ def _to_examples(rows: list, length: int) -> Examples:
 def prepare(path: str | Path, cfg: DataConfig) -> DataBundle:
     """Read real events, split globally by time and sample only past-aware examples."""
     path = Path(path)
-    if cfg.users < 1 or cfg.vocab_size < 4 or cfg.context_length < 1 or cfg.train_events < 1:
+    if cfg.users < 1 or cfg.vocab_size < 4 or cfg.context_length < 1 or cfg.train_events < 1 or cfg.eval_events_per_user < 1:
         raise ValueError("users, vocab_size, context_length and train_events must be positive")
     if cfg.min_history < 1 or not (0 < cfg.train_fraction < 1) or not (0 < cfg.valid_fraction < 1 - cfg.train_fraction):
         raise ValueError("Invalid history or split fractions")
@@ -162,10 +162,10 @@ def prepare(path: str | Path, cfg: DataConfig) -> DataBundle:
     token_to_item = {idx: item for item, idx in vocab.items()}
     item_counts = np.zeros(cfg.vocab_size, dtype=np.int64)
     item_seconds = np.zeros(cfg.vocab_size, dtype=np.float32)
+    duration_medians = historic.groupby("item_id", sort=False)["track_length_seconds"].median().to_dict()
     for item, n in selected:
         item_counts[vocab[item]] = n
-        sec = historic.loc[historic.item_id == item, "track_length_seconds"]
-        item_seconds[vocab[item]] = float(sec.median()) if len(sec) else 0.0
+        item_seconds[vocab[item]] = float(duration_medians.get(item, 0.0))
 
     rng = random.Random(cfg.seed)
     train_rows: list = []
