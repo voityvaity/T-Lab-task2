@@ -40,6 +40,9 @@ class Examples:
     completion: np.ndarray
     user: np.ndarray
     timestamp: np.ndarray
+    # Original timestamps for each context token, padded with -1. Optional
+    # for hand-authored unit fixtures, mandatory for dense real training.
+    context_timestamps: np.ndarray | None = None
 
     def __len__(self) -> int:
         return len(self.target)
@@ -126,16 +129,18 @@ def _select_train_users(path: Path, train_end: int, n: int, seed: int) -> set[in
 def _empty(length: int) -> Examples:
     return Examples(np.empty((0, length), dtype=np.int32), np.empty(0, dtype=np.int64),
                     np.empty(0, dtype=np.float32), np.empty(0, dtype=np.int64),
-                    np.empty(0, dtype=np.int64))
+                    np.empty(0, dtype=np.int64),
+                    np.empty((0, length), dtype=np.int64))
 
 
 def _to_examples(rows: list, length: int) -> Examples:
     if not rows:
         return _empty(length)
-    ctx, tar, rew, usr, tim = zip(*rows)
+    ctx, tar, rew, usr, tim, ctx_times = zip(*rows)
     return Examples(np.asarray(ctx, dtype=np.int32), np.asarray(tar, dtype=np.int64),
                     np.asarray(rew, dtype=np.float32), np.asarray(usr, dtype=np.int64),
-                    np.asarray(tim, dtype=np.int64))
+                    np.asarray(tim, dtype=np.int64),
+                    np.asarray(ctx_times, dtype=np.int64))
 
 
 def summarize_session_returns(
@@ -235,7 +240,7 @@ def prepare(path: str | Path, cfg: DataConfig) -> DataBundle:
     total = {"valid": 0, "test": 0}
     eligible = {"valid": 0, "test": 0}
     for uid, group in df.groupby("uid", sort=True):
-        history: deque[int] = deque(maxlen=cfg.context_length)
+        history: deque[tuple[int, int]] = deque(maxlen=cfg.context_length)
         user_valid: deque = deque(maxlen=cfg.eval_events_per_user)
         user_test: deque = deque(maxlen=cfg.eval_events_per_user)
         # All events within the same 5-second timestamp have unknown ordering:
@@ -252,9 +257,11 @@ def prepare(path: str | Path, cfg: DataConfig) -> DataBundle:
                 # Otherwise Recall/NDCG silently reward the policy for an easier,
                 # artificially filtered set of interactions. TRAIN cannot fit OOV.
                 if len(history) >= cfg.min_history and (token >= 2 or split != "train"):
-                    seq = ([0] * (cfg.context_length - len(history))) + list(history)
+                    padding = cfg.context_length - len(history)
+                    seq = ([0] * padding) + [token for token, _ in history]
+                    seq_times = ([-1] * padding) + [time for _, time in history]
                     ratio = min(1.0, max(0.0, float(event.played_ratio_pct) / 100))
-                    entry = (seq, token, ratio, int(uid), int(ts))
+                    entry = (seq, token, ratio, int(uid), int(ts), seq_times)
                     if split == "train":
                         train_total += 1
                         if len(train_rows) < cfg.train_events:
@@ -267,7 +274,7 @@ def prepare(path: str | Path, cfg: DataConfig) -> DataBundle:
                         user_valid.append(entry)
                     else:
                         user_test.append(entry)
-                pending.append(token)
+                pending.append((token, int(ts)))
             history.extend(pending)
         valid_rows.extend(user_valid)
         test_rows.extend(user_test)
