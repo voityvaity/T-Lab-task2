@@ -295,7 +295,10 @@ def run(args) -> dict:
     counts = torch.tensor(data.train_counts, dtype=torch.float32, device=device)
     durations = torch.tensor(data.train_duration, dtype=torch.float32, device=device)
 
-    base = make_gpt2(args.vocab, args.context, args.hidden, args.layers, args.heads).to(device)
+    # Vocabulary is exactly the observed TRAIN subcatalog + PAD/OOV;
+    # a fixed nominal cap can otherwise create recommendable phantom items.
+    base = make_gpt2(len(data.train_counts), args.context, args.hidden,
+                     args.layers, args.heads).to(device)
     logs = {"base": train_base(base, data.train, args.base_steps, args.batch, device,
                                args.base_lr, args.seed)}
     torch.save(base.state_dict(), out / "gpt2_base.pt")
