@@ -122,6 +122,68 @@ def reinforce_step(actor: GPT2LMHeadModel, reference: GPT2LMHeadModel,
                   "kl": float(kl.item()), "policy_loss": float(policy_loss.item())}
 
 
+def reinforce_rollout_step(actor: GPT2LMHeadModel, reference: GPT2LMHeadModel,
+                           reward_model: RewardModel, history: torch.Tensor,
+                           counts: torch.Tensor, durations: torch.Tensor,
+                           kind: str, kl_beta: float, horizon: int = 5,
+                           gamma: float = 0.9) -> tuple[torch.Tensor, dict]:
+    """Policy-gradient on hypothetical recommendations, not observed transitions.
+
+    A generated action is appended to the context as if it were consumed. The
+    feedback model has never observed those counterfactual transitions. This
+    procedure deliberately exposes distribution shift, and cannot establish
+    improved real-world multi-step reward without online experiments.
+    """
+    if horizon < 1 or not (0 <= gamma <= 1):
+        raise ValueError("horizon must be >= 1 and gamma in [0,1]")
+    context = history
+    log_selected = []
+    rewards = []
+    kls = []
+    repeated = []
+    for _ in range(horizon):
+        logit = mask_special(logits_for_next(actor, context))
+        with torch.no_grad():
+            ref_logit = mask_special(logits_for_next(reference, context))
+        logpi = F.log_softmax(logit, dim=-1)
+        logref = F.log_softmax(ref_logit, dim=-1)
+        probs = logpi.exp()
+        action = torch.multinomial(probs.detach(), 1).squeeze(1)
+        selected = logpi.gather(1, action.unsqueeze(1)).squeeze(1)
+        with torch.no_grad():
+            completion = reward_model(context, action)
+            r = shaped_reward(completion, action, context, counts, durations, kind)
+            is_repeat = (context == action[:, None]).any(dim=1).float()
+        log_selected.append(selected)
+        rewards.append(r)
+        repeated.append(is_repeat)
+        kls.append((probs * (logpi - logref)).sum(-1))
+        context = torch.cat((context[:, 1:], action.unsqueeze(1)), dim=1)
+
+    returns = []
+    accumulated = torch.zeros_like(rewards[0])
+    for r in reversed(rewards):
+        accumulated = r + gamma * accumulated
+        returns.append(accumulated)
+    returns.reverse()
+    pg_losses = []
+    for g, lp in zip(returns, log_selected):
+        if g.numel() > 1:
+            baseline = (g.sum() - g) / (g.numel() - 1)
+        else:
+            baseline = g.detach()
+        pg_losses.append(-((g - baseline).detach() * lp).mean())
+    pg = torch.stack(pg_losses).mean()
+    kl = torch.stack([part.mean() for part in kls]).mean()
+    loss = pg + kl_beta * kl
+    return loss, {"sampled_reward": float(torch.stack(rewards).mean().item()),
+                  "first_step_reward": float(rewards[0].mean().item()),
+                  "discounted_first_return": float(returns[0].mean().item()),
+                  "repeat_rate": float(torch.stack(repeated).mean().item()),
+                  "kl": float(kl.item()), "policy_loss": float(pg.item()),
+                  "horizon": horizon}
+
+
 def trainable_actor(base: GPT2LMHeadModel) -> GPT2LMHeadModel:
     actor = deepcopy(base)
     actor.requires_grad_(True)
