@@ -1,0 +1,11 @@
+__pycache__/
+.pytest_cache/
+*.pyc
+.venv/
+data/
+outputs/
+results/
+*.pt
+*.safetensors
+*.parquet
+.DS_Store
