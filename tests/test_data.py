@@ -105,9 +105,15 @@ def test_session_return_proxy_respects_24h_censoring() -> None:
     assert summary["low_completion"]["returned_within_24h"] == 1
     assert summary["high_completion"]["n_session_ends"] == 1
     assert summary["high_completion"]["returned_within_24h"] == 0
-    # Final event cannot have a complete 24h observation horizon and is censored.
-    assert summary["medium_completion"]["n_session_ends"] == 0
-    assert summary["medium_completion"]["return_rate"] is None
+    # User 1's last medium-completion event (ts=30000) is right-censored,
+    # but user 2's last medium event (ts=550) has a complete global horizon
+    # and correctly counts as a non-return. Both scenarios must be tested.
+    assert summary["medium_completion"]["n_session_ends"] == 1
+    assert summary["medium_completion"]["returned_within_24h"] == 0
+    only_user_1 = summarize_session_returns(events[events.uid == 1],
+                                            test_start=0, source_last=40_000)
+    assert only_user_1["medium_completion"]["n_session_ends"] == 0
+    assert only_user_1["medium_completion"]["return_rate"] is None
     assert summary["high_completion"]["return_rate"] == 0.0
 
 
