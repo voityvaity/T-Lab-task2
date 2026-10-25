@@ -26,7 +26,9 @@ def fake_source(tmp_path):
         (1, 13, 999000, 70), (2, 12, 1000000, 70),
     ]
     path = tmp_path / "listens.csv"
-    pd.DataFrame(rows, columns=["uid", "item_id", "timestamp", "played_ratio_pct"]).to_csv(path, index=False)
+    frame = pd.DataFrame(rows, columns=["uid", "item_id", "timestamp", "played_ratio_pct"])
+    frame["track_length_seconds"] = 180
+    frame.to_csv(path, index=False)
     return path
 
 
