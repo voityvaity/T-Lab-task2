@@ -124,6 +124,7 @@ def evaluate(policy, sample: Examples, reward: RewardModel, audit: RewardModel,
     lengths = []
     rm_pred = []
     rm_audit = []
+    expected_listened_seconds = []
     for x, y, _ in batches(sample, batch_size, device, seed=0, shuffle=False):
         logits = mask_special(logits_for_next(policy, x))
         if rerank_alpha is not None:
@@ -145,13 +146,16 @@ def evaluate(policy, sample: Examples, reward: RewardModel, audit: RewardModel,
         popularity.extend(torch.log1p(counts[top].float()).mean(dim=-1).cpu().tolist())
         lengths.extend(durations[top].float().mean(dim=-1).cpu().tolist())
         # Reward is only a learned extrapolation for these recommended items.
-        rm_pred.extend(reward(x, top).mean(dim=1).cpu().tolist())
+        predicted = reward(x, top)
+        rm_pred.extend(predicted.mean(dim=1).cpu().tolist())
+        expected_listened_seconds.extend((predicted * durations[top].clamp(min=0, max=600)).mean(dim=1).cpu().tolist())
         rm_audit.extend(audit(x, top).mean(dim=1).cpu().tolist())
     all_rec = np.asarray(recommended, dtype=np.int64)
     return ({
         "queries": len(scores), "recall_at_10": float(np.mean(hits)),
         "ndcg_at_10": float(np.mean(scores)),
         "predicted_completion_at_10": float(np.mean(rm_pred)),
+        "predicted_capped_listen_seconds_at_10": float(np.mean(expected_listened_seconds)),
         "auditor_completion_at_10": float(np.mean(rm_audit)),
         "auditor_minus_optimized": float(np.mean(np.asarray(rm_audit) - np.asarray(rm_pred))),
         "repeated_from_history_rate": float(np.mean(repeated)),
@@ -187,6 +191,42 @@ def rollout(policy, sample: Examples, reward: RewardModel, device, batch_size: i
             context = torch.cat([context[:, 1:], action.unsqueeze(1)], dim=1)
     return [{"step": i + 1, "mean_predicted_completion": float(np.mean(out[i])),
              "repeat_of_context_rate": float(np.mean(rec_seen[i]))}
+            for i in range(steps)]
+
+
+@torch.no_grad()
+def real_vs_hypothetical_rollout(policy, sample: Examples, device, steps: int = 5) -> list[dict]:
+    """Compare free-running fictional contexts with recorded real-event contexts.
+
+    Selected eligible test events may have intervening OOV events. This is a
+    descriptive distribution-drift diagnostic, not an estimate of user responses.
+    """
+    policy.eval()
+    by_user = {}
+    for i, uid in enumerate(sample.user.tolist()):
+        by_user.setdefault(uid, []).append(i)
+    js_by_step = [[] for _ in range(steps)]
+    hit_by_step = [[] for _ in range(steps)]
+    for idx in by_user.values():
+        idx = sorted(idx, key=lambda j: int(sample.timestamp[j]))
+        if len(idx) < steps:
+            continue
+        context = torch.as_tensor(sample.context[idx[0]][None, :], device=device, dtype=torch.long)
+        for i in range(steps):
+            real_context = torch.as_tensor(sample.context[idx[i]][None, :], device=device, dtype=torch.long)
+            pred_free = F.softmax(mask_special(logits_for_next(policy, context)), dim=-1)
+            pred_real = F.softmax(mask_special(logits_for_next(policy, real_context)), dim=-1)
+            mixture = 0.5 * (pred_free + pred_real)
+            js = 0.5 * (F.kl_div(mixture.clamp(min=1e-12).log(), pred_free, reduction="sum") +
+                        F.kl_div(mixture.clamp(min=1e-12).log(), pred_real, reduction="sum"))
+            js_by_step[i].append(float(js.item()))
+            actual = int(sample.target[idx[i]])
+            hit_by_step[i].append(float(actual in pred_free.topk(min(10, pred_free.size(-1) - 2)).indices[0].tolist()))
+            generated = pred_free.argmax(dim=-1, keepdim=True)
+            context = torch.cat([context[:, 1:], generated], dim=1)
+    return [{"step": i + 1, "paired_trajectories": len(js_by_step[i]),
+             "js_divergence_from_real_context": float(np.mean(js_by_step[i])) if js_by_step[i] else None,
+             "free_rollout_real_next_hit_at_10": float(np.mean(hit_by_step[i])) if hit_by_step[i] else None}
             for i in range(steps)]
 
 
@@ -306,6 +346,9 @@ def run(args) -> dict:
     rollouts = {name: rollout(policy, data.test, reward, device, args.batch, steps=5, rerank_alpha=alpha)
                 for name, (policy, alpha, kind) in candidates.items()
                 if name == "gpt2" or name == selected or (name.startswith("rl_") and kind == "completion")}
+    drift = {name: real_vs_hypothetical_rollout(policy, data.test, device)
+             for name, (policy, alpha, kind) in candidates.items()
+             if name == "gpt2" or name == selected}
     results = {
         "status": "measured_offline_model_based_not_causal",
         "selected_on_validation": selected,
@@ -318,6 +361,7 @@ def run(args) -> dict:
         "validation": validation, "test": test_results,
         "test_paired_ndcg_deltas": test_deltas,
         "five_step_hypothetical_rollouts": rollouts,
+        "real_context_vs_generated_context_drift": drift,
         "limitations": ["Top-N train-only catalog rather than entire Yambda",
                         "Observed-only feedback; no reliable counterfactual reward",
                         "Two reward heads use disjoint train users but shared encoder",
@@ -337,7 +381,7 @@ def main() -> None:
     p.add_argument("--vocab", type=int, default=4096)
     p.add_argument("--context", type=int, default=32)
     p.add_argument("--train-events", type=int, default=30000)
-    p.add_argument("--eval-per-user", type=int, default=4)
+    p.add_argument("--eval-per-user", type=int, default=5)
     p.add_argument("--hidden", type=int, default=96)
     p.add_argument("--layers", type=int, default=2)
     p.add_argument("--heads", type=int, default=4)
