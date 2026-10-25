@@ -16,6 +16,8 @@
 
 **Последующая доработка:** [TRAINING_UPGRADE_2026-10-26.md](research/TRAINING_UPGRADE_2026-10-26.md) — отдельная фиксация изменений **после знакомства с первым тестовым пилотом**, без выдуманных результатов новой модели.
 
+**Действительно выполнен improved run** [GitHub Actions №40228502903](https://github.com/voityvaity/T-Lab-task2/actions/runs/40228502903), исходный коммит `f388152`: GPT-2 test NDCG@10 = 0.021921; выбранный по validation пятишаговый RL = 0.020249 (**падение ~7,6%**) при росте предсказанного reward. Это содержательный отрицательный результат. [Разбор результатов и первоначальной методологии](research/YAMBDA_IMPROVED_AND_METHOD_AUDIT_2026-10-26.md). После его выполнения отдельно исправлен session timestamp unit bug: пока нет нового запуска с исправлением, старые показатели «24h» невалидны.
+
 **Подтверждённые эксперименты:** [отчёт реального Yambda pilot](research/YAMBDA_PILOT_2026-10-26.md), [GitHub Actions Yambda №40225318999](https://github.com/voityvaity/T-Lab-task2/actions/runs/40225318999), [повторный synthetic smoke №40225192422](https://github.com/voityvaity/T-Lab-task2/actions/runs/40225192422) и [первый smoke-аудит](research/SMOKE_AUDIT_2026-10-26.md). Результаты реального пилота **не следует** переносить на другие seed/пользовательские когорты без повторения.
 
 **Исторический аудит до успешного smoke:** [проверка 25.10.2026](research/RE_AUDIT_2026-10-25.md). Актуальный статус — выше.
