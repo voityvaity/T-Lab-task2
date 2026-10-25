@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from tlab2.data import DataConfig, prepare, save_metadata
+from tlab2.data import DataConfig, prepare, save_metadata, summarize_session_returns
 
 
 def fake_events() -> pd.DataFrame:
@@ -84,3 +84,24 @@ def test_same_timestamp_does_not_look_ahead(tmp_path: Path) -> None:
     indexes = np.flatnonzero((all_data.train.user == 10) & (all_data.train.timestamp == 35))
     assert len(indexes) == 2
     assert np.array_equal(all_data.train.context[indexes[0]], all_data.train.context[indexes[1]])
+
+
+def test_session_return_proxy_respects_24h_censoring() -> None:
+    # Five-second time units. User 1 ends three listening sessions:
+    # low completion -> return in 1h; high completion -> no return in 24h;
+    # final event -> censored (no full observation horizon).
+    events = pd.DataFrame([
+        {"uid": 1, "timestamp": 100, "played_ratio_pct": 30},
+        {"uid": 1, "timestamp": 820, "played_ratio_pct": 95},
+        {"uid": 1, "timestamp": 30_000, "played_ratio_pct": 50},
+        {"uid": 2, "timestamp": 250, "played_ratio_pct": 55},
+        {"uid": 2, "timestamp": 550, "played_ratio_pct": 70},  # same session; not an end
+    ])
+    summary = summarize_session_returns(events, test_start=0, source_last=40_000)
+    assert summary["low_completion"]["n_session_ends"] == 1
+    assert summary["low_completion"]["returned_within_24h"] == 1
+    assert summary["high_completion"]["n_session_ends"] == 1
+    assert summary["high_completion"]["returned_within_24h"] == 0
+    assert summary["medium_completion"]["n_session_ends"] == 1
+    assert summary["medium_completion"]["returned_within_24h"] == 0
+    assert summary["high_completion"]["return_rate"] == 0.0
