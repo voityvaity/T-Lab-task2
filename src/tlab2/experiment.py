@@ -373,6 +373,8 @@ def subset(data: Examples, mask: np.ndarray) -> Examples:
 
 
 def run(args) -> dict:
+    if args.source_kind == "yambda" and Path(args.data).suffix.lower() != ".parquet":
+        raise ValueError("A real Yambda run must read the version-pinned Parquet file, not a CSV smoke fixture")
     seed_all(args.seed)
     torch.set_num_threads(min(4, max(1, torch.get_num_threads())))
     device = torch.device("cuda" if torch.cuda.is_available() and not args.cpu else "cpu")
