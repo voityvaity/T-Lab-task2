@@ -52,6 +52,8 @@ def test_causal_split_and_reproducibility(tmp_path: Path) -> None:
     import json
     info = json.loads((tmp_path / "outputs/dataset_protocol.json").read_text())
     assert info["input_file_sha256"] == a.input_file_sha256
+    assert (info["dense_training_timestamp_audit"]["strictly_later_causal_transitions"]
+            <= info["dense_training_timestamp_audit"]["potential_known_item_transitions"])
 
 
 def test_future_item_change_cannot_modify_train_vocabulary(tmp_path: Path) -> None:
