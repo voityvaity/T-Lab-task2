@@ -88,7 +88,7 @@ def test_integrity_check_rejects_claimed_rl_win_when_reward_model_is_worse_than_
     }
     path = tmp_path / "experiment.json"
     path.write_text(json.dumps(data))
-    with pytest.raises(AssertionError, match="useless observed-feedback model"):
+    with pytest.raises(AssertionError, match=r"useless observed-feedback(?: expected-reward)? model"):
         checker()(path)
 
 
