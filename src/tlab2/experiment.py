@@ -430,6 +430,7 @@ def run(args) -> dict:
         "software": {"python": platform.python_version(), "torch": torch.__version__},
         "parameters": vars(args),
         "reward_quality_on_observed_events": reward_metrics,
+        "observed_session_return_proxy_test_only": data.session_proxy,
         "validation": validation, "test": test_results,
         "test_paired_ndcg_deltas": test_deltas,
         "five_step_hypothetical_rollouts": rollouts,
@@ -438,6 +439,7 @@ def run(args) -> dict:
                         "Observed-only feedback; no reliable counterfactual reward",
                         "Main/uncertainty heads share training users but vary initialization; auditor trained on held-out train users with shared frozen encoder",
                         "Generated items inserted hypothetically, without feedback simulation",
+                        "Session-return associations are observational and do not identify policy-caused retention",
                         "All absolute metrics conditional on targets inside train vocabulary"]
     }
     (out / "experiment.json").write_text(json.dumps(results, indent=2, ensure_ascii=False), encoding="utf-8")
