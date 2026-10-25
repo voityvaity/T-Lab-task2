@@ -19,6 +19,7 @@ from torch.nn import functional as F
 
 from tlab2.data import DataConfig, Examples, prepare, save_metadata
 from tlab2.baselines import PopularityBaseline, SequentialRulesBaseline
+from tlab2.selection import select_policy
 from tlab2.models import (RewardModel, logits_for_next, make_gpt2, mask_special,
                           reinforce_step, reinforce_rollout_step, trainable_actor)
 
@@ -399,11 +400,13 @@ def run(args) -> dict:
                               args.batch, rerank_alpha=alpha)
         validation[name] = metrics
 
-    # Freeze selection rule before test: best auditor-estimated completion with
-    # validation NDCG not more than allowed_delta below supervised baseline.
-    eligible = [(name, scores) for name, scores in validation.items()
-                if scores["ndcg_at_10"] >= base_valid["ndcg_at_10"] - args.allowed_ndcg_drop]
-    selected = max(eligible, key=lambda kv: kv[1]["auditor_completion_at_10"])[0] if eligible else "gpt2"
+    # Candidate choice reads validation only, BEFORE any test result is loaded.
+    selection = select_policy(
+        validation, max_relative_ndcg_drop=args.max_relative_ndcg_drop,
+        max_absolute_ndcg_drop=args.max_absolute_ndcg_drop,
+        min_auditor_gain=args.min_auditor_gain,
+    )
+    selected = selection["selected"]
     # Simple, TRAIN-only controls; not eligible for RL configuration selection.
     simple = {
         "popularity": PopularityBaseline(data.train_counts),
@@ -444,7 +447,8 @@ def run(args) -> dict:
                    else "measured_offline_model_based_not_causal"),
         "source_kind": args.source_kind,
         "selected_on_validation": selected,
-        "selection_rule": f"max auditor completion subject to validation NDCG >= GPT2-{args.allowed_ndcg_drop}",
+        "selection_rule": "maximize auditor reward subject to absolute and relative validation NDCG guards",
+        "selection_diagnostics": selection,
         "device": str(device),
         "seed": args.seed,
         "software": {"python": platform.python_version(), "torch": torch.__version__},
@@ -493,7 +497,12 @@ def main() -> None:
     p.add_argument("--betas", default="0.02,0.2")
     p.add_argument("--rl-horizons", default="1,5", help="Compare myopic and hypothetical multi-step policy gradients")
     p.add_argument("--rerank-alphas", default="0,1,3")
-    p.add_argument("--allowed-ndcg-drop", type=float, default=0.01)
+    p.add_argument("--max-relative-ndcg-drop", type=float, default=0.05,
+                   help="Reject candidates losing >5 percent of baseline validation NDCG")
+    p.add_argument("--max-absolute-ndcg-drop", type=float, default=0.005,
+                   help="Independent absolute upper bound on validation NDCG loss")
+    p.add_argument("--min-auditor-gain", type=float, default=0.0,
+                   help="Require positive auditor reward gain to select non-baseline")
     p.add_argument("--cpu", action="store_true")
     args = p.parse_args()
     result = run(args)
