@@ -77,8 +77,10 @@ def test_integrity_check_rejects_claimed_rl_win_when_reward_model_is_worse_than_
     }
     data["selected_on_validation"] = "rl_completion_h1_kl_0.02"
     data["reward_quality_on_observed_events"] = {
-        "optimized_valid": {"mae": .19, "constant_mean_mae": .16},
-        "auditor_valid": {"mae": .13, "constant_mean_mae": .15},
+        "optimized_valid": {"mae": .19, "constant_mean_mae": .16,
+                            "rmse": .45, "constant_mean_rmse": .38},
+        "auditor_valid": {"mae": .13, "constant_mean_mae": .15,
+                          "rmse": .24, "constant_mean_rmse": .33},
     }
     data["validation"] = {
         "gpt2": {"auditor_completion_at_10": .50},
