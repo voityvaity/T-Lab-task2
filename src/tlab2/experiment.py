@@ -19,11 +19,13 @@ import torch
 from torch.nn import functional as F
 
 from tlab2.data import DataConfig, Examples, prepare, save_metadata
+from tlab2.reward_priors import estimate_completion_prior
 from tlab2.baselines import PopularityBaseline, SequentialRulesBaseline, SmoothedTransitionBaseline
 from tlab2.selection import select_policy, pareto_frontier
 from tlab2.diagnostics import actual_five_step_windows
 from tlab2.models import (RewardModel, logits_for_next, make_gpt2, mask_special,
-                          reinforce_step, reinforce_rollout_step, trainable_actor)
+                          reinforce_step, reinforce_rollout_step, trainable_actor,
+                          _history_mask_and_positions)
 
 
 def seed_all(seed: int) -> None:
@@ -71,45 +73,85 @@ def supervised_validation_loss(policy, data: Examples, batch_size: int,
     return total_loss / total
 
 
+def dense_autoregressive_loss(policy, x: torch.Tensor, y: torch.Tensor,
+                              dense_weight: float = 0.6) -> tuple[torch.Tensor, dict]:
+    """Use every valid causal transition inside the history, plus its next item.
+
+    No target leaks into its own prediction: target at position t is history
+    token t+1, and the LAST target is y. PAD/OOV are not prediction targets.
+    """
+    if not 0 <= dense_weight <= 1:
+        raise ValueError("dense_weight must be in [0,1]")
+    attention, position_ids = _history_mask_and_positions(x)
+    logits = mask_special(policy(input_ids=x, attention_mask=attention,
+                                 position_ids=position_ids).logits)
+    last_ce = F.cross_entropy(logits[:, -1, :], y)
+    shifted = torch.cat((x[:, 1:], y[:, None]), dim=1)
+    allowed = (x != 0) & (shifted >= 2)
+    dense_targets = shifted.masked_fill(~allowed, -100)
+    # The LAST event is always valid in a training batch.
+    dense_ce = F.cross_entropy(logits.reshape(-1, logits.size(-1)),
+                               dense_targets.reshape(-1), ignore_index=-100)
+    loss = (1.0 - dense_weight) * last_ce + dense_weight * dense_ce
+    return loss, {"last_next_ce": float(last_ce.detach().item()),
+                  "dense_ce": float(dense_ce.detach().item()),
+                  "causal_transitions": int(allowed.sum().item())}
+
+
 def train_base(policy, train: Examples, steps: int, batch_size: int, device,
                learning_rate: float, seed: int,
-               validation: Examples | None = None) -> list[dict]:
-    """Fit GPT-2 and restore best checkpoint by train-excluded validation CE."""
-    if steps < 1:
-        raise ValueError("base_steps must be >= 1")
+               validation: Examples | None = None,
+               dense_weight: float = 0.6,
+               patience: int = 4) -> list[dict]:
+    """Train on dense causal next-item transitions; select using future validation CE."""
+    if steps < 1 or patience < 1:
+        raise ValueError("steps/patience must be positive")
+    if not 0 <= dense_weight <= 1:
+        raise ValueError("dense_weight must be in [0,1]")
     policy.train()
     opt = torch.optim.AdamW(policy.parameters(), lr=learning_rate, weight_decay=0.01)
     logs = []
     iteration = 0
     best_loss = math.inf
     best_state = None
-    eval_interval = max(1, steps // 8)
-    while iteration < steps:
+    unimproved_checks = 0
+    early_stop = False
+    eval_interval = max(1, steps // 12)
+    while iteration < steps and not early_stop:
         for x, y, _ in batches(train, batch_size, device, seed + iteration):
             opt.zero_grad(set_to_none=True)
-            loss = F.cross_entropy(mask_special(policy_logits(policy, x)), y)
+            loss, train_stats = dense_autoregressive_loss(policy, x, y, dense_weight)
             loss.backward()
             torch.nn.utils.clip_grad_norm_(policy.parameters(), 1.0)
             opt.step()
             iteration += 1
             if iteration == 1 or iteration % eval_interval == 0 or iteration == steps:
-                row = {"step": iteration, "cross_entropy": float(loss.item())}
+                row = {"step": iteration, "mixed_cross_entropy": float(loss.item()),
+                       **train_stats}
                 if validation is not None:
                     val_loss = supervised_validation_loss(policy, validation, batch_size, device)
                     row["validation_cross_entropy_in_vocab"] = (
                         val_loss if math.isfinite(val_loss) else None
                     )
-                    if val_loss < best_loss:
+                    if val_loss < best_loss - 0.0001:
                         best_loss = val_loss
                         best_state = deepcopy(policy.state_dict())
+                        unimproved_checks = 0
+                    else:
+                        unimproved_checks += 1
+                    if unimproved_checks >= patience:
+                        early_stop = True
                 logs.append(row)
-            if iteration >= steps:
+            if iteration >= steps or early_stop:
                 break
             policy.train()
     if best_state is not None:
         policy.load_state_dict(best_state)
         logs.append({"selected_validation_cross_entropy": best_loss,
-                     "checkpoint_selection": "minimum_in_vocab_validation_ce"})
+                     "checkpoint_selection": "minimum_in_vocab_validation_ce",
+                     "stopped_after_steps": iteration,
+                     "stopped_early": early_stop,
+                     "dense_weight": dense_weight})
     elif validation is not None:
         logs.append({"checkpoint_selection": "last_step_no_in_vocab_validation_targets"})
     policy.eval()
