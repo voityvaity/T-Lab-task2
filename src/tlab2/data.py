@@ -210,8 +210,11 @@ def prepare(path: str | Path, cfg: DataConfig) -> DataBundle:
     vocab = {item: idx + 2 for idx, (item, _) in enumerate(selected)}
     raw_to_token = vocab
     token_to_item = {idx: item for item, idx in vocab.items()}
-    item_counts = np.zeros(cfg.vocab_size, dtype=np.int64)
-    item_seconds = np.zeros(cfg.vocab_size, dtype=np.float32)
+    # Never expose token IDs for catalogue slots without a TRAIN item:
+    # random GPT-2 logits for non-existent IDs can attract RL reward hacking.
+    effective_vocab_size = len(selected) + 2
+    item_counts = np.zeros(effective_vocab_size, dtype=np.int64)
+    item_seconds = np.zeros(effective_vocab_size, dtype=np.float32)
     duration_medians = historic.groupby("item_id", sort=False)["track_length_seconds"].median().to_dict()
     for item, n in selected:
         item_counts[vocab[item]] = n
@@ -277,6 +280,7 @@ def save_metadata(bundle: DataBundle, output: str | Path) -> None:
             "coverage": bundle.coverage, "train_size": len(bundle.train),
             "valid_size": len(bundle.valid), "test_size": len(bundle.test),
             "mapped_items": len(bundle.token_to_item),
+            "effective_vocab_size": len(bundle.train_counts),
             "observed_session_return_proxy_test_only": bundle.session_proxy,
             "selected_train_user_cohort_sha256": bundle.train_cohort_sha256}
     (root / "dataset_protocol.json").write_text(json.dumps(info, indent=2, ensure_ascii=False), encoding="utf-8")
