@@ -54,9 +54,23 @@ def report(result_path: Path) -> str:
                          metric(item["auditor_completion_at_10"]),
                          metric(item["predicted_capped_listen_seconds_at_10"]),
                          metric(item["repeated_from_history_rate"]),
-                         metric(item["catalog_coverage"])])
+                         metric(item["catalog_coverage"]),
+                         metric(item["rm_absolute_disagreement_at_10"]),
+                         metric(item["most_common_top1_share"])])
         lines += [table(["Модель", "Recall@10", "NDCG@10", "Optimized RM",
-                         "Auditor RM", "Watch sec", "History repeats", "Catalog coverage"], rows), ""]
+                         "Auditor RM", "Watch sec", "History repeats", "Catalog coverage",
+                         "RM disagreement", "Top1 concentration"], rows), ""]
+    proxy = data.get("observed_session_return_proxy_test_only", {})
+    lines += ["## Наблюдаемая связь завершения трека с возвращением (не A/B)", "",
+              "Сессия заканчивается при перерыве более 30 минут. Возвращение "
+              "фиксируется в течение 24 часов после завершения сессии. "
+              "Включены только наблюдения с полным горизонтом; результаты "
+              "**не являются причинным эффектом рекомендаций**.", ""]
+    if proxy:
+        lines += [table(["Предыдущее дослушивание", "Завершений сессии",
+                         "Возвратов за 24 ч", "Доля возвратов"],
+                        [[key, str(x["n_session_ends"]), str(x["returned_within_24h"]),
+                          metric(x["return_rate"])] for key, x in proxy.items()]), ""]
     lines += ["## Парные пользовательские bootstrap-интервалы разницы Test NDCG@10", ""]
     delta = data["test_paired_ndcg_deltas"]
     lines += [table(["Модель − GPT2", "Средняя разница", "95% CI", "Кластеров"],
