@@ -63,3 +63,56 @@ class SequentialRulesBaseline:
                 result[row, ids] += conditional / age
         result[:, :2] = -1e6
         return torch.as_tensor(result, dtype=torch.float32, device=context.device)
+
+
+class SmoothedTransitionBaseline:
+    """Multi-lag sparse conditional evidence + train-only popularity background.
+
+    Inspired by PCTM's count smoothing but NOT a reproduction of Spotify's
+    official implementation. Built from the *same sampled training examples*
+    as GPT-2, with deterministic tie-breaking by token ID.
+    """
+
+    def __init__(self, train: Examples, train_counts: np.ndarray,
+                 max_lag: int = 5, decay: float = 0.7,
+                 smoothing: float = 20.0, pop_boost: float = 0.03):
+        if max_lag < 1 or not 0 < decay <= 1 or smoothing <= 0 or pop_boost < 0:
+            raise ValueError("Invalid smoothed-transition parameters")
+        self.pop = PopularityBaseline(train_counts)
+        self.max_lag = max_lag
+        self.decay = decay
+        self.pop_boost = pop_boost
+        edges: dict[int, dict[int, float]] = defaultdict(dict)
+        for context, target in zip(train.context, train.target):
+            dst = int(target)
+            if dst < 2:
+                continue
+            for age, source in enumerate(context[-max_lag:][::-1], start=0):
+                src = int(source)
+                if src < 2:
+                    continue
+                w = decay ** age
+                edges[src][dst] = edges[src].get(dst, 0.0) + w
+        vocabulary = len(train_counts) - 2
+        self.rules = {}
+        for src, targets in edges.items():
+            ids = np.asarray(sorted(targets), dtype=np.int64)
+            values = np.asarray([targets[int(item)] for item in ids], dtype=np.float32)
+            # Non-parametric smoothed conditional evidence, not a calibrated
+            # probability or official PCTM kernel.
+            evidence = np.log1p(values * vocabulary / smoothing)
+            self.rules[src] = (ids, evidence)
+
+    def score(self, context: torch.Tensor) -> torch.Tensor:
+        contexts = context.detach().cpu().numpy()
+        background = self.pop_boost * self.pop.log_pop
+        scores = np.broadcast_to(background, (len(contexts), len(background))).copy()
+        for i, ctx in enumerate(contexts):
+            for age, source in enumerate(ctx[-self.max_lag:][::-1], start=0):
+                pair = self.rules.get(int(source))
+                if pair is None:
+                    continue
+                indices, evidence = pair
+                scores[i, indices] += (self.decay ** age) * evidence
+        scores[:, :2] = -1e6
+        return torch.as_tensor(scores, dtype=torch.float32, device=context.device)
