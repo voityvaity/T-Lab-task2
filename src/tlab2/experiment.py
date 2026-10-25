@@ -462,6 +462,10 @@ def run(args) -> dict:
             for horizon_str in args.rl_horizons.split(","):
                 horizon = int(horizon_str)
                 tag = f"rl_{reward_kind}_h{horizon}_kl_{beta:g}"
+                # Common-random-numbers design: each RL variant begins with
+                # the same sampler state. The policies subsequently diverge
+                # only through their objectives and regularizers.
+                seed_all(args.seed + 1000)
                 actor = trainable_actor(base).to(device)
                 # Disable stochastic dropout while measuring exact policy/ref KL;
                 # eval() changes dropout behavior, not gradient computation.
